@@ -69,7 +69,7 @@ Every line starts with the milliseconds since AnyPad started. The first line of 
 | `vendor 054c product 09cc` (or `has no profile, reading its HID descriptor`) | The controller was identified. Without a profile it goes to the generic one |
 | `channel 0x11 open`, `channel 0x13 open` | The HID channels |
 | `ready as <profile> in slot N` | Linked and its profile chosen |
-| `first input (report 0x.., N bytes): virtual DualSense created` | It sent data: the console now sees a controller |
+| `first input (report 0x.., N bytes): virtual DualSense requested (bind pending)` | The pad sent a HID report; virtual device creation and user binding still need confirmation in later `slot` log lines |
 | `not in its full report yet; asking again every 3 s (reports seen: ...)` | The controller stays in a simple mode: its wake-up sequence is not working. The reports seen tell what it sends |
 | `incoming connection from ...: not ours, left to the system` | Someone else's device (for example the DualSense) is calling the console; AnyPad steps aside |
 

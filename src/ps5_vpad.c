@@ -381,6 +381,17 @@ int vpad_creds_raise(void)
     return g_raised || elevate();
 }
 
+int vpad_session_active(void)
+{
+    int32_t login[4];
+    int i;
+
+    if (!g_ready || g_user == -1 || sceUserServiceGetLoginUserIdList(login) != 0) return 0;
+    for (i = 0; i < 4; i++)
+        if (login[i] == g_user) return 1;
+    return 0;
+}
+
 int vpad_init(void)
 {
     static const char *const mbus[] = {

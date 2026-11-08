@@ -6,3 +6,5 @@
 *.swp
 # ELFs and their hashes (dist/) are published as release files, not kept in the repository.
 dist/
+
+.serena/

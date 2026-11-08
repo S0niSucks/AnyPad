@@ -26,6 +26,11 @@
  * Returns 0 if any step fails; virtual pads then stay off. */
 int  vpad_init(void);
 
+/* Whether the user to whom virtual pads belong is still signed in.
+ * False on service failure or when that user logs out: release Bluetooth
+ * rather than keep feeding pads bound to a dead session. */
+int  vpad_session_active(void);
+
 /* Asks for a virtual pad for `slot`. It is created and identified by
  * vpad_poll() without blocking the caller; vpad_live() says when it is. */
 int  vpad_add(int slot);

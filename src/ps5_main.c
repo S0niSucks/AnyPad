@@ -136,7 +136,7 @@ static void on_connect(void *ud, int slot, const pad_info *info)
         g_pad_id[slot].pid = info->pid;
         g_pad_id[slot].capture_until = 0;
     }
-    if (vpad_add(slot)) notify(TR("AnyPad PS5: %s conectado", "AnyPad PS5: %s connected"), info->profile);
+    if (vpad_add(slot)) notify(TR("AnyPad PS5: %s envia datos; mando virtual pendiente (ver el log)", "AnyPad PS5: %s sends input; virtual controller pending (see log)"), info->profile);
     else notify(TR("AnyPad PS5: %s conectado, pero sin mando virtual (ver el log)", "AnyPad PS5: %s connected, but no virtual controller (see the log)"), info->profile);
 }
 
@@ -371,12 +371,24 @@ int main(void)
                  "No se pueden crear mandos virtuales en este sistema (ver el log). No se ha tocado el Bluetooth.");
         notify(TR("AnyPad PS5: no se pueden crear mandos virtuales.\nVer el menu o el log. El Bluetooth no se ha tocado", "AnyPad PS5: cannot create virtual controllers.\nSee the menu or the log. Bluetooth was not touched"));
     } else {
-        bt_begin();
+        if (vpad_session_active()) bt_begin();
+        else {
+            log_line("session: no signed-in user for virtual pads; Bluetooth left untouched");
+            why = "no signed-in user";
+            g_stop = 1;
+        }
     }
 
     while (!g_stop && !g_web_stop) {
         long now;
 
+        /* A pad bound to a user who just logged out must not keep our USB
+         * reads alive on the chip used by the physical DualSense. Check
+         * before the next host_poll, not after feeding another frame. */
+        if (g_vpad_ok && !vpad_session_active()) {
+            why = "controller user signed out";
+            break;
+        }
         if (g_host) host_poll(g_host, 4);
         else usleep(4000);
         now = now_ms();

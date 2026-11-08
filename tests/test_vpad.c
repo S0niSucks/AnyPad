@@ -98,6 +98,7 @@ int main(void)
     CHECK(vpad_init() == 1);
     CHECK(strstr(g_calls, "IP") != NULL);               /* init, then privilege */
     CHECK(strchr(g_calls, 'P') > strchr(g_calls, 'I'));
+    CHECK(vpad_session_active() == 1);
 
     printf("a privilege answer that is not 0 is a warning, as in the references\n");
     reset(0, SCE_PAD_ERROR_NOT_INITIALIZED);
@@ -157,10 +158,18 @@ int main(void)
         g_pad_opened = 0; g_closed = 0; g_now += 10000;
         reset(0, 0);
         CHECK(vpad_init() == 1);
+        CHECK(vpad_session_active() == 1);
         vpad_close_physical();
         g_pad_opened = 0;
         g_now += 10000;
         CHECK(vpad_read_physical(&b) == 1 && g_open_user == 0x2000);
+
+        /* The owner logs out while the guest stays in: a stale virtual
+         * controller must not keep the Bluetooth reader running. */
+        g_login[1] = -1;
+        CHECK(vpad_session_active() == 0);
+        g_login[1] = 0x2000;
+        CHECK(vpad_session_active() == 1);
 
         /* the initial user is not signed in; the foreground one is */
         vpad_close_physical();
@@ -195,6 +204,7 @@ int main(void)
         g_now += 10000;
         CHECK(vpad_init() == 1);
         g_now += 10000;
+        CHECK(vpad_session_active() == 0);
         CHECK(vpad_read_physical(&b) == 0 && g_pad_opened == 0);
 
         /* USER_NOT_LOGIN on open: the user is looked for again, at the next try */
