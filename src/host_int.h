@@ -254,6 +254,19 @@ typedef struct {
     int pin_zero;                   /* "0000" was its PIN (legacy pairing) */
 } link_t;
 
+/* Per-pad pairing-recovery budgets, kept for the current search: a pad that
+ * collides or refuses channels keeps its own tries even when its link is
+ * dropped and made again (a per-link counter would reset with every fresh
+ * link), and a second pad pairing in the same window does not spend the
+ * first one's (with two 8BitDo connecting at once, one shared counter left
+ * the second pad blocked for the rest of the search). */
+typedef struct {
+    unsigned char addr[6];
+    int used;
+    int turned_down;                /* of its calls to the console turned down */
+    int fresh_left;                 /* links that may still be made again for it */
+} pad_budget;
+
 struct host {
     hci_t hci;
     host_events ev;
@@ -301,8 +314,9 @@ struct host {
     long purge_at;                  /* when stale links were last cleared */
     long yield_at;                  /* when events were last left to the system */
     int inquiring;
-    unsigned char defer_rec[14];    /* a pad found whose extended answer came empty (cut short) */
-    long defer_at;                  /* since when it waits for a complete one; 0: none */
+    unsigned char defer_rec[HOST_MAX_PADS][14]; /* pads found whose extended answer came empty (cut short) */
+    long defer_at[HOST_MAX_PADS];     /* since when each waits for a complete one; 0: none */
+    pad_budget budget[HOST_MAX_PADS]; /* per-pad recovery budgets (this search) */
     unsigned char last_call[14];    /* the answer the last call was made from */
     int repage_left, in_repage;     /* extra calls still allowed; the one being made is one of them */
     long repage_at;                 /* when the next extra call is due; 0: none */
@@ -323,8 +337,6 @@ struct host {
     long ps_restore_at;      /* putting it back failed: try again then */
     int reads_now;           /* event reads the transport keeps now */
     long full_reads_until;   /* a command was sent: all reads until its reply can come */
-    int turned_down;         /* calls of the pad itself turned down in this search */
-    int fresh_left;          /* links that may still be made again in this search */
     int reject_pending;      /* one of them was just turned down: is it really a call? */
     unsigned char reject_addr[6];
     int ps_restore_tries;

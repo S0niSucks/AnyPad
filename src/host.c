@@ -71,6 +71,27 @@ int send_cmd(host_t *h, unsigned op, const void *p, int len)
 
 int slot_of(host_t *h, const link_t *l) { return (int)(l - h->links); }
 
+/* This pad's recovery budgets for the current search, by address: they
+ * survive its link being dropped and made again. NULL only when the table
+ * is full (four pads already seen), and then the pad gets no more tries. */
+static pad_budget *pad_budget_of(host_t *h, const unsigned char *addr)
+{
+    int i;
+
+    for (i = 0; i < HOST_MAX_PADS; i++)
+        if (h->budget[i].used && memcmp(h->budget[i].addr, addr, 6) == 0)
+            return &h->budget[i];
+    for (i = 0; i < HOST_MAX_PADS; i++)
+        if (!h->budget[i].used) {
+            memset(&h->budget[i], 0, sizeof h->budget[i]);
+            h->budget[i].used = 1;
+            memcpy(h->budget[i].addr, addr, 6);
+            h->budget[i].fresh_left = FRESH_LINK_TRIES;
+            return &h->budget[i];
+        }
+    return NULL;
+}
+
 link_t *link_by_addr(host_t *h, const unsigned char *a)
 {
     int i;
@@ -487,13 +508,21 @@ static void on_signaling(host_t *h, link_t *l, const unsigned char *d, int len)
                  * console, with and without a call of its own turned down, and
                  * a new link worked at once both times). A fresh link is made
                  * instead of waiting out the eight refusals: at most
-                 * FRESH_LINK_TRIES per search, then the refusals run out as before. */
-                if (le16(c + 4) == 4 && l->pairing && ch->psm == 0x01 && ch->refused >= 3 &&
-                    h->fresh_left > 0 && memcmp(h->last_call, l->addr, 6) == 0) {
-                    h->fresh_left--;                    /* the search window is not stretched */
-                    h->repage_at = now_ms() + T_FRESH_LINK;
-                    link_disconnect(h, l, "no resources for a channel: a fresh link is made");
-                    break;
+                 * FRESH_LINK_TRIES per pad in the search (each pad gets its
+                 * own, kept by address across the links made for it, and the
+                 * window is not stretched). */
+                if (le16(c + 4) == 4 && l->pairing && ch->psm == 0x01 && ch->refused >= 3) {
+                    pad_budget *b = pad_budget_of(h, l->addr);
+                    if (b && b->fresh_left > 0) {
+                        b->fresh_left--;
+                        /* The re-call goes through the repage of the pad last
+                         * called: make that this pad, or another pad being set
+                         * up would be called instead. */
+                        memcpy(h->last_call, l->addr, sizeof h->last_call);
+                        h->repage_at = now_ms() + T_FRESH_LINK;
+                        link_disconnect(h, l, "no resources for a channel: a fresh link is made");
+                        break;
+                    }
                 }
                 if (ch->refused >= 8)
                     link_disconnect(h, l, "channel refused eight times");
@@ -986,7 +1015,7 @@ static void announce(host_t *h, link_t *l, int report_id, int len)
     info.pid = l->pid;
     info.profile = l->prof->name;
     memcpy(info.addr, l->addr, 6);
-    log_line("pad %s: first input (report %#04x, %d bytes): virtual DualSense created", addr_str(l->addr), report_id, len);
+    log_line("pad %s: first input (report %#04x, %d bytes): virtual DualSense requested (bind pending)", addr_str(l->addr), report_id, len);
     if (h->ev.on_connect) h->ev.on_connect(h->ev.ud, slot_of(h, l), &info);
 }
 
@@ -1321,6 +1350,7 @@ static void on_found(host_t *h, const unsigned char *rec, const unsigned char *e
 {
     uint32_t cod = (uint32_t)rec[8] | (uint32_t)rec[9] << 8 | (uint32_t)rec[10] << 16;
     unsigned vid, pid;
+    int i;
 
     if (now_ms() >= h->pair_until) return;
     if (h->discovery_blocked || is_banned(h, rec)) return;          /* banned: not even looked at */
@@ -1345,24 +1375,32 @@ static void on_found(host_t *h, const unsigned char *rec, const unsigned char *e
         }
         /* It may have answered cut short before (no data, so no model then):
          * that pending call is cancelled, never made. */
-        if (h->defer_at && memcmp(h->defer_rec, rec, 6) == 0) {
-            h->defer_at = 0;
-            log_line("inquiry: pending call to %s cancelled: it is a DualSense", addr_str(rec));
-        }
+        for (i = 0; i < HOST_MAX_PADS; i++)
+            if (h->defer_at[i] && memcmp(h->defer_rec[i], rec, 6) == 0) {
+                h->defer_at[i] = 0;
+                log_line("inquiry: pending call to %s cancelled: it is a DualSense", addr_str(rec));
+            }
         return;
     }
     /* Empty EIR is not proof of USB truncation. Keep the existing bounded
-     * wait heuristic, but validate framing separately before reaching here. */
+     * wait heuristic, but validate framing separately before reaching here.
+     * One deferred candidate per pad: with several pads answering at once,
+     * each keeps its own wait, and none is silently dropped. */
     if (eir && !eir_has_fields(eir, eir_len)) {
-        if (!h->defer_at) {
-            memcpy(h->defer_rec, rec, sizeof h->defer_rec);
-            h->defer_at = now_ms();
-            log_line("inquiry: %s answered without data; waiting up to %d s for a complete answer before calling it",
-                     addr_str(rec), T_EIR_WAIT / 1000);
-        }
-        return;
+        for (i = 0; i < HOST_MAX_PADS; i++)
+            if (h->defer_at[i] && memcmp(h->defer_rec[i], rec, 6) == 0) return;   /* already waiting */
+        for (i = 0; i < HOST_MAX_PADS; i++)
+            if (!h->defer_at[i]) {
+                memcpy(h->defer_rec[i], rec, 14);
+                h->defer_at[i] = now_ms();
+                log_line("inquiry: %s answered without data; waiting up to %d s for a complete answer before calling it",
+                         addr_str(rec), T_EIR_WAIT / 1000);
+                return;
+            }
+        return;                     /* every wait is taken: seen again, or not called */
     }
-    if (h->defer_at && memcmp(h->defer_rec, rec, 6) == 0) h->defer_at = 0;
+    for (i = 0; i < HOST_MAX_PADS; i++)
+        if (h->defer_at[i] && memcmp(h->defer_rec[i], rec, 6) == 0) h->defer_at[i] = 0;
     log_line("found gamepad %s (class %06x) after %ld ms of search", addr_str(rec), (unsigned)cod,
              now_ms() - h->search_started);
     pair_with(h, rec);
@@ -1664,14 +1702,21 @@ static void on_event(host_t *h, const unsigned char *ev, int len)
                 l = &h->links[i];
                 if (l->used && !l->connected && l->le == want_le &&
                     (l->pairing || want_le)) {
-                    if (!want_le && ev[2] == 0x0b && h->turned_down < TURNDOWN_TRIES) {
+                    if (!want_le && memcmp(h->last_call, l->addr, 6) != 0)
+                        continue;  /* the refused call was another pad's: this
+                                    * link is still waiting for its own answer */
+                    if (!want_le && ev[2] == 0x0b &&
+                        pad_budget_of(h, l->addr) &&
+                        pad_budget_of(h, l->addr)->turned_down < TURNDOWN_TRIES) {
                         /* Usually the pad itself is calling the console: it
                          * thinks it is still linked from an earlier session,
                          * and its call stays pending for the connection accept
                          * timeout (29 s), blocking ours. It is turned down
                          * and called at once. If no call was pending, the
                          * reply to the rejection says so, and it is a real
-                         * link: then it is left alone, as before. */
+                         * link: then it is left alone, as before. The budget
+                         * is per pad, kept by address: two pads colliding in
+                         * one search each keep their own tries. */
                         unsigned char r[7];
                         long hold = now_ms() + T_TURNDOWN_WAIT + T_CONN_TIMEOUT + 5000;
                         memcpy(r, l->addr, 6);
@@ -1679,7 +1724,7 @@ static void on_event(host_t *h, const unsigned char *ev, int len)
                         send_cmd(h, OP_REJECT_CONNECTION, r, 7);
                         memcpy(h->reject_addr, l->addr, 6);
                         h->reject_pending = 1;
-                        h->turned_down++;
+                        pad_budget_of(h, l->addr)->turned_down++;
                         h->repage_at = now_ms() + T_TURNDOWN_WAIT;
                         if (h->pair_until < hold) h->pair_until = hold;
                         log_line("pad %s: its own call to the console was pending (it thinks it is still linked): "
@@ -2021,7 +2066,9 @@ static int pairing_busy(const host_t *h, long now)
 {
     int i;
 
-    if (now < h->pair_until || h->repage_at || h->defer_at) return 1;
+    if (now < h->pair_until || h->repage_at) return 1;
+    for (i = 0; i < HOST_MAX_PADS; i++)
+        if (h->defer_at[i]) return 1;
     for (i = 0; i < HOST_MAX_PADS; i++)
         if (h->links[i].used && h->links[i].pairing && !h->links[i].ready) return 1;
     return 0;
@@ -2112,22 +2159,33 @@ void host_poll(host_t *h, int timeout_ms)
         send_cmd(h, OP_INQUIRY_CANCEL, NULL, 0);
         h->inquiring = 0;
     }
-    if (h->defer_at && now >= h->pair_until) {
-        log_line("inquiry: pending candidate expired with the search window");
-        h->defer_at = 0;
-    } else if (h->defer_at && !linking &&
-               (now >= h->pair_until - 1000 || now - h->defer_at >= T_EIR_WAIT)) {
-        unsigned char rec[14];
-        memcpy(rec, h->defer_rec, sizeof rec);
-        h->defer_at = 0;
-        log_line("found gamepad %s; no complete answer came in time, calling it anyway (%ld ms of search)",
-                 addr_str(rec), now - h->search_started);
-        pair_with(h, rec);
-        /* pair_with may allocate a link: do not start another inquiry in
-         * this same poll with the stale value of linking. */
+    /* Deferred candidates: each pad's wait is its own. When the window ends
+     * they all expire; otherwise the oldest one whose wait is over (or that
+     * must be called before the window closes) is called, one per poll, so
+     * the others keep their turn. */
+    if (now >= h->pair_until) {
+        int any = 0;
         for (i = 0; i < HOST_MAX_PADS; i++)
-            if (h->links[i].used && h->links[i].pairing && !h->links[i].ready &&
-                !h->links[i].le) linking = 1;
+            if (h->defer_at[i]) { h->defer_at[i] = 0; any = 1; }
+        if (any) log_line("inquiry: pending candidates expired with the search window");
+    } else if (!linking) {
+        int d = -1;
+        for (i = 0; i < HOST_MAX_PADS; i++)
+            if (h->defer_at[i] && (now >= h->pair_until - 1000 || now - h->defer_at[i] >= T_EIR_WAIT) &&
+                (d < 0 || h->defer_at[i] < h->defer_at[d])) d = i;
+        if (d >= 0) {
+            unsigned char rec[14];
+            memcpy(rec, h->defer_rec[d], sizeof rec);
+            h->defer_at[d] = 0;
+            log_line("found gamepad %s; no complete answer came in time, calling it anyway (%ld ms of search)",
+                     addr_str(rec), now - h->search_started);
+            pair_with(h, rec);
+            /* pair_with may allocate a link: do not start another inquiry in
+             * this same poll with the stale value of linking. */
+            for (i = 0; i < HOST_MAX_PADS; i++)
+                if (h->links[i].used && h->links[i].pairing && !h->links[i].ready &&
+                    !h->links[i].le) linking = 1;
+        }
     }
     if (h->repage_at && now >= h->repage_at) {
         unsigned char rec[14];
@@ -2157,12 +2215,12 @@ void host_poll(host_t *h, int timeout_ms)
 int host_pair(host_t *h, int seconds)
 {
     long now = now_ms();
+    int i;
 
     /* A fresh request or cancellation must not inherit an old candidate. */
-    h->defer_at = 0;
+    for (i = 0; i < HOST_MAX_PADS; i++) h->defer_at[i] = 0;
+    memset(h->budget, 0, sizeof h->budget);     /* new search: fresh budgets */
     h->collision_blocked = 0;
-    h->turned_down = 0;
-    h->fresh_left = FRESH_LINK_TRIES;
     h->reject_pending = 0;
     if (seconds <= 0) {
         h->repage_at = 0;
