@@ -135,12 +135,12 @@ Notas:
 | Motion (giroscópio + acelerômetro, unidades Sony) | ✅ DS4/Switch Pro-family | `st->has_motion` |
 | Bateria/LEDs de jogador no controle | ✅ por perfil (`ds5_output`, `switch_init`, `xbox_output`, `wii_init`) | `k_player_colours` por slot |
 
-**O que NÃO chega ao jogo hoje:**
+**O que NÃO chegava ao jogo (parcialmente resolvido em `75db5fe`, pendente de validação no console):**
 
 | Recurso | Status | Evidência |
 |---|---|---|
-| **Vibração/rumble vinda do jogo** | ❌ **não ligado** | `host_set_output()` só é chamado nos **testes** (`test_host.c`, `test_le.c`); `ps5_main.c`/`ps5_vpad.c` nunca chamam. Não há leitura de output do DualSense virtual (`scePadVirtualDevice*Output`) no código. O rumble só existiria se algo setsse `l->out`. |
-| Lightbar comandada pelo jogo | ❌ idem (cor fixa por slot em `k_player_colours`) | `host.c:10` |
+| **Vibração/rumble vinda do jogo** | 🧪 **ligada** no `75db5fe`: `vpad_poll` lê `scePadVirtualDeviceGetRemoteSetting` por slot (motores `[3..4]`, lightbar `[5..7]`, layout comprovado em PS4 pelo OneFamily) e encaminha ao `host_set_output` → perfil. Guardas: rate-limit 20 ms, keepalive 100 ms, stop 3×50 ms, stale 4 s. Teste novo em `test_vpad.c`; falta confirmar no console (layout do setting pode diferir no firmware 13.60). |
+| Lightbar comandada pelo jogo | 🧪 idem (bytes `[5..7]`, escala 0..63 → ×4); cor inicial por slot mantida fora de wishes | — |
 | Áudio/fone DualSense | ❌ fora de escopo (HID apenas) | — |
 
 **Implicação prática**: em jogos, os controles Bluetooth funcionam como entrada
