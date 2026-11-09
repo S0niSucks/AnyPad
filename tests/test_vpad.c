@@ -72,6 +72,25 @@ int32_t scePadReadState(int32_t h, void *d)
 }
 int32_t scePadVirtualDeviceAddDevice(void *p, int32_t t) { (void)p; (void)t; return 0; }
 int32_t scePadVirtualDeviceInsertData(int32_t h, const void *d) { (void)h; (void)d; return 0; }
+static uint8_t g_remote[128];
+static int32_t g_remote_result = 0;
+int32_t scePadVirtualDeviceGetRemoteSetting(int32_t h, void *out)
+{
+    (void)h;
+    if (g_remote_result == 0) memcpy(out, g_remote, sizeof g_remote);
+    return g_remote_result;
+}
+
+/* The wishes handed to the pad, as the output sink received them. */
+static pad_output g_got[8];
+static int g_got_n;
+static int test_output_sink(void *ud, int slot, const pad_output *out)
+{
+    pad_output *arr = ud;
+    (void)slot;
+    if (g_got_n < 8) arr[g_got_n++] = *out;
+    return 1;
+}
 int32_t scePadVirtualDeviceDeleteDevice(int32_t h) { (void)h; return 0; }
 uint64_t kernel_get_ucred_authid(pid_t pid) { (void)pid; return g_authid; }
 int32_t kernel_set_ucred_authid(pid_t pid, uint64_t a) { (void)pid; g_authid = a; return 0; }
@@ -231,6 +250,60 @@ int main(void)
         CHECK(vpad_choose_user(two, 0x1111, 0x1111, "9999") == 0x1111);     /* not signed in: default */
         CHECK(vpad_choose_user(two, 0x1111, 0x1111, "zz") == 0x1111);       /* not an id: default */
         CHECK(vpad_choose_user(none, 0x1111, 0x1111, "other") == -1);       /* nobody signed in */
+    }
+
+    printf("the console's wishes (rumble, light bar) reach the pad of the slot\n");
+    {
+        int sends;
+
+        ph_clock_hook = fake_clock;
+        reset(0, 0);
+        CHECK(vpad_init() == 1);
+        g_got_n = 0;
+        vpad_set_output_sink(test_output_sink, g_got);
+        vpad_test_slot_ready(0, 7);
+
+        g_remote[3] = 200; g_remote[4] = 100;                    /* both motors, half light */
+        g_remote[5] = 31;
+        vpad_poll(g_now);
+        CHECK(g_got_n == 1 && g_got[0].strong == 200 && g_got[0].weak == 100);
+        CHECK(g_got[0].r == 124 && g_got[0].player == 1);
+
+        g_now += 30;                                             /* too soon to say it again */
+        vpad_poll(g_now);
+        CHECK(g_got_n == 1);
+        g_now += 100;                                            /* still on: said again */
+        vpad_poll(g_now);
+        CHECK(g_got_n == 2 && g_got[1].strong == 200);
+
+        g_remote[3] = 0; g_remote[4] = 0;                        /* the game stops it */
+        g_now += 50;
+        sends = g_got_n;
+        vpad_poll(g_now);
+        CHECK(g_got_n == sends + 1 && g_got[g_got_n - 1].strong == 0);   /* the stop, at once */
+        g_now += 50;                                             /* and repeated, so none is left on */
+        vpad_poll(g_now);
+        vpad_poll(g_now + 50);
+        vpad_poll(g_now + 100);
+        CHECK(g_got_n == sends + 4 && g_got[g_got_n - 1].strong == 0 && g_got[g_got_n - 1].weak == 0);
+
+        g_remote[3] = 255;                                       /* a wish that never changes: a game gone */
+        g_now += 250;                                            /* past the last repeat's clock */
+        vpad_poll(g_now);
+        CHECK(g_got[g_got_n - 1].strong == 255);                 /* sent while it is new */
+        g_now += 4100;
+        vpad_poll(g_now);
+        CHECK(g_got[g_got_n - 1].strong == 0);                   /* silenced as stale */
+
+        g_remote_result = (int32_t)0x80920005;                   /* no answer: nothing is sent, nothing breaks */
+        g_remote[3] = 100;
+        g_now += 250;
+        sends = g_got_n;
+        vpad_poll(g_now);
+        CHECK(g_got_n == sends);
+        g_remote_result = 0;
+        memset(g_remote, 0, sizeof g_remote);
+        vpad_set_output_sink(NULL, NULL);
     }
 
     printf(g_fail ? "%d check(s) failed\n" : "all vpad checks passed\n", g_fail);

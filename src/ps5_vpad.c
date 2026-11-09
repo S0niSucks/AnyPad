@@ -76,6 +76,7 @@ int32_t scePadClose(int32_t handle);
 int32_t scePadReadState(int32_t handle, ScePadData *data);
 int32_t scePadVirtualDeviceAddDevice(void *param, int32_t deviceType);
 int32_t scePadVirtualDeviceInsertData(int32_t handle, const void *data);
+int32_t scePadVirtualDeviceGetRemoteSetting(int32_t handle, void *out_setting);
 int32_t scePadVirtualDeviceDeleteDevice(int32_t handle);
 
 /* From the payload SDK (ps5/kernel.h). */
@@ -101,6 +102,14 @@ int sceKernelSendNotificationRequest(int, notify_request *, size_t, int);
 
 enum { VP_FREE, VP_QUEUED, VP_PENDING, VP_READY, VP_FAILED };
 
+/* Output polling of a virtual DualSense (see output_poll): the console's
+ * wishes arrive as a setting block whose first bytes carry them. */
+#define OUT_T_MIN       20      /* ms between two changed non-zero wishes */
+#define OUT_T_KEEPALIVE 100     /* ... but a rumble still on is resent (some pads stop by themselves) */
+#define OUT_T_STOP      50      /* ... and a stop is repeated, so no rumble is left on */
+#define OUT_STOP_TRIES  3
+#define OUT_T_STALE     4000    /* a non-zero wish unchanged for this long is a closed game's */
+
 typedef struct {
     int st;
     int remove_when_found;      /* removed while being identified */
@@ -109,12 +118,19 @@ typedef struct {
     pad_state last;             /* the pad's latest state, resent while PS is held from the menu */
     long ps_until;              /* ms; PS is added to the frames until then (0: not held) */
     int ps_active;              /* a frame with PS went out and the release is still to be sent */
+
+    /* Its latest output as sent to the pad, and as the console last gave it. */
+    uint8_t o_lg, o_sm, o_r, o_g, o_b, o_lg_raw, o_sm_raw;
+    long t_o_change, t_o_send;
+    int o_stop_left;
 } vslot;
 
 static mbus_bind_fn g_bind;
 static int g_ready;                         /* vpad_init succeeded */
 static int32_t g_user = -1;
 static vslot g_slot[HOST_MAX_PADS];
+static int (*g_output)(void *ud, int slot, const pad_output *out);
+static void *g_output_ud;
 static void ps_tick(long now);
 
 /* The identification under way: one at a time, so a DEVICE_ADDED line can
@@ -519,12 +535,95 @@ static void finish_identification(long now)
     v->st = VP_READY;
 }
 
+/* What the console asks of each virtual DualSense: the setting block the
+ * remote-setting call fills carries the two motors and the light bar in its
+ * first bytes (the layout a PS4 bridge reads the same way). A wish is sent
+ * when it changes, a rumble still on is resent (some pads' rumble stops by
+ * itself), a stop is repeated so none is left on, and a non-zero wish that
+ * never changes again is a game gone: it is silenced. */
+static void output_poll(long now)
+{
+    int i;
+
+    if (!g_output) return;
+    for (i = 0; i < HOST_MAX_PADS; i++) {
+        vslot *v = &g_slot[i];
+        unsigned char s[128];
+        uint8_t lg, sm, r, g, b;
+        int send = 0;
+
+        if (v->st != VP_READY || v->handle < 0) continue;
+        memset(s, 0, sizeof s);
+        if (scePadVirtualDeviceGetRemoteSetting(v->handle, s) != 0) continue;
+        lg = s[3]; sm = s[4]; r = s[5]; g = s[6]; b = s[7];
+
+        if (lg != v->o_lg_raw || sm != v->o_sm_raw) {
+            v->o_lg_raw = lg;
+            v->o_sm_raw = sm;
+            v->t_o_change = now;
+        }
+        if ((lg || sm) && v->t_o_change && now - v->t_o_change >= OUT_T_STALE) {
+            lg = 0;
+            sm = 0;
+        }
+
+        if (lg != v->o_lg || sm != v->o_sm || r != v->o_r || g != v->o_g || b != v->o_b) {
+            if (!lg && !sm) {
+                send = 1;                       /* a stop goes out at once */
+                v->o_stop_left = OUT_STOP_TRIES;
+            } else if (now - v->t_o_send >= OUT_T_MIN) {
+                send = 1;
+            }
+        } else if (!lg && !sm && v->o_stop_left > 0 && now - v->t_o_send >= OUT_T_STOP) {
+            send = 1;                           /* the stop, repeated */
+            v->o_stop_left--;
+        } else if ((lg || sm) && now - v->t_o_send >= OUT_T_KEEPALIVE) {
+            send = 1;                           /* still on: said again */
+        }
+        if (!send) continue;
+
+        v->o_lg = lg;
+        v->o_sm = sm;
+        v->o_r = r;
+        v->o_g = g;
+        v->o_b = b;
+        v->t_o_send = now;
+        {
+            pad_output o;
+
+            memset(&o, 0, sizeof o);
+            o.strong = lg;
+            o.weak = sm;
+            o.r = (uint8_t)(r > 63 ? 255 : r * 4);     /* its 0..63, as the bar takes it */
+            o.g = (uint8_t)(g > 63 ? 255 : g * 4);
+            o.b = (uint8_t)(b > 63 ? 255 : b * 4);
+            o.player = (uint8_t)(i + 1);               /* the slot's player, for its LEDs */
+            g_output(g_output_ud, i, &o);
+        }
+    }
+}
+
+void vpad_set_output_sink(int (*set)(void *ud, int slot, const pad_output *out), void *ud)
+{
+    g_output = set;
+    g_output_ud = ud;
+}
+
+void vpad_test_slot_ready(int slot, int32_t handle)
+{
+    if (slot < 0 || slot >= HOST_MAX_PADS) return;
+    memset(&g_slot[slot], 0, sizeof g_slot[slot]);
+    g_slot[slot].st = VP_READY;
+    g_slot[slot].handle = handle;
+}
+
 void vpad_poll(long now)
 {
     int i;
 
     if (!g_ready) return;
     ps_tick(now);
+    output_poll(now);
     if (g_pending >= 0) {
         log_source_read();
         finish_identification(now);

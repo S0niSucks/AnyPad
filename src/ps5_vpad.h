@@ -39,6 +39,14 @@ int  vpad_live(int slot);
 
 void vpad_update(int slot, const pad_state *st);
 
+/* What the console asks of a virtual DualSense (rumble, light bar), polled
+ * by vpad_poll(): each new wish is handed to `set` for the Bluetooth pad of
+ * that slot. Registered once, before the first vpad_poll(). */
+void vpad_set_output_sink(int (*set)(void *ud, int slot, const pad_output *out), void *ud);
+
+/* Tests only: a slot made ready by hand, with this handle. */
+void vpad_test_slot_ready(int slot, int32_t handle);
+
 /* Holds PS on the virtual pad for `ms` milliseconds (the menu's PS button).
  * 0 if the slot has no live virtual pad. */
 int  vpad_press_ps(int slot, int ms);

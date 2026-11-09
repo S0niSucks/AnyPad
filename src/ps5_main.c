@@ -196,6 +196,14 @@ static void on_disconnect(void *ud, int slot)
     notify(TR("AnyPad PS5: mando %d desconectado", "AnyPad PS5: controller %d disconnected"), slot + 1);
 }
 
+/* What the console asks of a virtual DualSense (rumble, light bar) goes to
+ * the Bluetooth pad of that slot. */
+static int on_pad_output(void *ud, int slot, const pad_output *out)
+{
+    (void)ud;
+    return g_host ? host_set_output(g_host, slot, out) : 0;
+}
+
 /* ---- Bluetooth, one try at a time ------------------------------------------ */
 
 /* The host calls this whenever it waits for the chip, so the menu answers
@@ -371,6 +379,7 @@ int main(void)
                  "No se pueden crear mandos virtuales en este sistema (ver el log). No se ha tocado el Bluetooth.");
         notify(TR("AnyPad PS5: no se pueden crear mandos virtuales.\nVer el menu o el log. El Bluetooth no se ha tocado", "AnyPad PS5: cannot create virtual controllers.\nSee the menu or the log. Bluetooth was not touched"));
     } else {
+        vpad_set_output_sink(on_pad_output, NULL);    /* rumble and light bar reach the pads */
         if (vpad_session_active()) bt_begin();
         else {
             log_line("session: no signed-in user for virtual pads; Bluetooth left untouched");
