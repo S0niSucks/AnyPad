@@ -62,7 +62,7 @@ Los modelos Bluetooth LE necesitan emparejado con Secure Connections; si el chip
 | `057e:2019` | Nintendo Switch Online N64 controller | 🧪 |
 | `057e:201a` | Nintendo Switch Online Mega Drive / Genesis controller | 🧪 |
 
-Rumble is not done yet for these. / La vibración aún no está hecha para estos.
+Rumble for these is written (report 0x10, the dekuNukem amplitude tables at the default frequencies) and passes the simulator tests, but has not been tried on a console yet. / La vibración para estos está escrita (report 0x10, las tablas de amplitud de dekuNukem a las frecuencias por defecto) y pasa las pruebas del simulador, pero aún no se ha probado en una consola.
 
 ## Third-party pads with a built-in mapping / Mandos de terceros con mapa integrado
 

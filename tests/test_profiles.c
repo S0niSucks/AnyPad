@@ -247,6 +247,25 @@ static void test_switch(void)
         if (step == 3) CHECK(out[10] == 0x30 && out[11] == 0x02);       /* player 2 LED */
     }
     CHECK(step == 4);
+
+    /* Rumble: report 0x10, each motor's four bytes the encoding of the
+     * amplitude tables at the two default frequencies (160 and 320 Hz). */
+    printf("Switch Pro: rumble\n");
+    memset(ctx, 0, sizeof ctx);
+    memset(&o, 0, sizeof o);
+    n = p->build_output(ctx, &o, out, sizeof out);
+    CHECK(n == 10 && out[0] == 0x10 && out[1] == 0);
+    CHECK(out[2] == 0x00 && out[3] == 0x01 && out[4] == 0x40 && out[5] == 0x40);   /* neutral */
+    CHECK(memcmp(out + 6, out + 2, 4) == 0);
+
+    o.strong = 255;                                       /* the largest amplitude */
+    n = p->build_output(ctx, &o, out, sizeof out);
+    CHECK(n == 10 && out[2] == 0x00 && out[3] == 0xC9 && out[4] == 0x40 && out[5] == 0x72);
+    CHECK(out[1] == 1);                                   /* the counter moved */
+
+    o.weak = 128;                                         /* 503 of the curve: the 512 entry */
+    n = p->build_output(ctx, &o, out, sizeof out);
+    CHECK(n == 10 && out[7] == 0x01 + 0x8a && out[8] == 0x80 + 0x40 && out[9] == 0x62);
 }
 
 /* A typical Bluetooth gamepad descriptor: report 1 with X, Y, Z, Rz

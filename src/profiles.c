@@ -549,6 +549,73 @@ static int switch_init(void *ctx, int step, const pad_output *o, uint8_t *b, int
     }
 }
 
+/* Rumble, as the pad takes it in an output report 0x10: [1] the packet
+ * counter, then each motor's four bytes, left first. Those four encode an
+ * amplitude and two frequencies the pad's motor sings; the amplitudes are a
+ * logarithmic curve, the table dekuNukem's rumble data table lists (as
+ * Linux's hid-nintendo and SDL use it). The two frequencies are the usual
+ * defaults, 160 Hz and 320 Hz, whose own encoding is constant. */
+static const uint16_t switch_rumble_amp[][3] = {   /* { amp, high, low } */
+    { 0, 0x00, 0x0040 }, { 10, 0x02, 0x8040 }, { 12, 0x04, 0x0041 },
+    { 14, 0x06, 0x8041 }, { 17, 0x08, 0x0042 }, { 20, 0x0a, 0x8042 },
+    { 24, 0x0c, 0x0043 }, { 28, 0x0e, 0x8043 }, { 33, 0x10, 0x0044 },
+    { 40, 0x12, 0x8044 }, { 47, 0x14, 0x0045 }, { 56, 0x16, 0x8045 },
+    { 67, 0x18, 0x0046 }, { 80, 0x1a, 0x8046 }, { 95, 0x1c, 0x0047 },
+    { 112, 0x1e, 0x8047 }, { 117, 0x20, 0x0048 }, { 123, 0x22, 0x8048 },
+    { 128, 0x24, 0x0049 }, { 134, 0x26, 0x8049 }, { 140, 0x28, 0x004a },
+    { 146, 0x2a, 0x804a }, { 152, 0x2c, 0x004b }, { 159, 0x2e, 0x804b },
+    { 166, 0x30, 0x004c }, { 173, 0x32, 0x804c }, { 181, 0x34, 0x004d },
+    { 189, 0x36, 0x804d }, { 198, 0x38, 0x004e }, { 206, 0x3a, 0x804e },
+    { 215, 0x3c, 0x004f }, { 225, 0x3e, 0x804f }, { 230, 0x40, 0x0050 },
+    { 235, 0x42, 0x8050 }, { 240, 0x44, 0x0051 }, { 245, 0x46, 0x8051 },
+    { 251, 0x48, 0x0052 }, { 256, 0x4a, 0x8052 }, { 262, 0x4c, 0x0053 },
+    { 268, 0x4e, 0x8053 }, { 273, 0x50, 0x0054 }, { 279, 0x52, 0x8054 },
+    { 286, 0x54, 0x0055 }, { 292, 0x56, 0x8055 }, { 298, 0x58, 0x0056 },
+    { 305, 0x5a, 0x8056 }, { 311, 0x5c, 0x0057 }, { 318, 0x5e, 0x8057 },
+    { 325, 0x60, 0x0058 }, { 332, 0x62, 0x8058 }, { 340, 0x64, 0x0059 },
+    { 347, 0x66, 0x8059 }, { 355, 0x68, 0x005a }, { 362, 0x6a, 0x805a },
+    { 370, 0x6c, 0x005b }, { 378, 0x6e, 0x805b }, { 387, 0x70, 0x005c },
+    { 395, 0x72, 0x805c }, { 404, 0x74, 0x005d }, { 413, 0x76, 0x805d },
+    { 422, 0x78, 0x005e }, { 431, 0x7a, 0x805e }, { 440, 0x7c, 0x005f },
+    { 450, 0x7e, 0x805f }, { 460, 0x80, 0x0060 }, { 470, 0x82, 0x8060 },
+    { 480, 0x84, 0x0061 }, { 491, 0x86, 0x8061 }, { 501, 0x88, 0x0062 },
+    { 512, 0x8a, 0x8062 }, { 524, 0x8c, 0x0063 }, { 535, 0x8e, 0x8063 },
+    { 547, 0x90, 0x0064 }, { 559, 0x92, 0x8064 }, { 571, 0x94, 0x0065 },
+    { 584, 0x96, 0x8065 }, { 596, 0x98, 0x0066 }, { 609, 0x9a, 0x8066 },
+    { 623, 0x9c, 0x0067 }, { 636, 0x9e, 0x8067 }, { 650, 0xa0, 0x0068 },
+    { 665, 0xa2, 0x8068 }, { 679, 0xa4, 0x0069 }, { 694, 0xa6, 0x8069 },
+    { 709, 0xa8, 0x006a }, { 725, 0xaa, 0x806a }, { 741, 0xac, 0x006b },
+    { 757, 0xae, 0x806b }, { 773, 0xb0, 0x006c }, { 790, 0xb2, 0x806c },
+    { 808, 0xb4, 0x006d }, { 825, 0xb6, 0x806d }, { 843, 0xb8, 0x006e },
+    { 862, 0xba, 0x806e }, { 881, 0xbc, 0x006f }, { 900, 0xbe, 0x806f },
+    { 920, 0xc0, 0x0070 }, { 940, 0xc2, 0x8070 }, { 960, 0xc4, 0x0071 },
+    { 981, 0xc6, 0x8071 }, { 1003, 0xc8, 0x0072 },
+};
+
+static void switch_encode_rumble(uint8_t *d, unsigned amp)
+{
+    int i, n = (int)(sizeof switch_rumble_amp / sizeof switch_rumble_amp[0]);
+
+    for (i = 0; i < n && switch_rumble_amp[i][0] < amp; i++);   /* the first at or above */
+    if (i == n) i = n - 1;
+    d[0] = 0x00;                                        /* 320 Hz, high byte */
+    d[1] = (uint8_t)(0x01 + switch_rumble_amp[i][1]);   /* ... low byte + the amp's */
+    d[2] = (uint8_t)(0x40 + (switch_rumble_amp[i][2] >> 8));    /* 160 Hz + the amp's */
+    d[3] = (uint8_t)switch_rumble_amp[i][2];
+}
+
+static int switch_output(void *ctx, const pad_output *o, uint8_t *b, int max)
+{
+    switch_ctx *c = ctx;
+
+    if (max < 10) return 0;
+    b[0] = 0x10;                                        /* rumble, no subcommand */
+    b[1] = c->counter++ & 0x0F;
+    switch_encode_rumble(b + 2, o->strong * 1003u / 255u);      /* the big motor */
+    switch_encode_rumble(b + 6, o->weak * 1003u / 255u);
+    return 10;
+}
+
 /* ---- a single Joy-Con, held sideways ----------------------------------------
  *
  * The same subcommands and full report 0x30 as the Pro Controller, but only
@@ -800,8 +867,8 @@ static const pad_profile k_profiles[] = {
     { "DualShock 4", IDS(ds4_ids),    ds4_parse,    ds4_output,  ds4_init,    1, 0, NULL, 0x05 },
     { "DualSense",   IDS(ds5_ids),    ds5_parse,    ds5_output,  ds5_init,    1, 0, NULL, 0 },
     { "Xbox",        IDS(xbox_ids),   xbox_parse,   xbox_output, NULL,        0, 0, xbox_setup, 0 },
-    { "Switch Pro",  IDS(switch_ids), switch_parse, NULL,        switch_init, 1, 0, NULL, 0 },
-    { "Joy-Con",     IDS(joycon_ids), joycon_parse, NULL,        joycon_init, 1, 0, joycon_setup, 0 },
+    { "Switch Pro",  IDS(switch_ids), switch_parse, switch_output, switch_init, 1, 50, NULL, 0 },
+    { "Joy-Con",     IDS(joycon_ids), joycon_parse, switch_output, joycon_init, 1, 50, joycon_setup, 0 },
     { "Wii",         IDS(wii_ids),    wii_parse,    NULL,        wii_init,    1, 0, NULL, 0 },
 };
 
