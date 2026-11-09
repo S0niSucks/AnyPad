@@ -69,6 +69,21 @@ seu próprio orçamento de recuperação. Comportamento com **um** controle perm
 idêntico (mesmo orçamento, mesmos caminhos) — requisito do upstream ("must not alter
 how the DualShock 4 and the 8BitDo connect").
 
+## Validação no console (2026-11-09, build 0720217)
+
+Logs reais (`anypad.log` de duas sessões) confirmaram:
+
+1. **Bug original corrigido no hardware**: os dois 8BitDo (`E4:17:D8:67:C5:6F`,
+   `E4:17:D8:E0:A7:92`) conectaram **juntos**, `virtual DualSense created` nos
+   slots 0 e 1, em várias sessões.
+2. **Novo problema encontrado e corrigido** (build `ca73c8a`): DualSense do
+   **sistema** tentando conectar sem fio falhava em loop — o yield de 30 s
+   expirava no meio do setup do sistema (auth + canais HID) após o retry de
+   ~22 s; o AnyPad voltava a ler eventos e roubava o resto do pareamento
+   (`44:46:48:C8:EE:C7` às 6406 s e 6538 s; `90:B6:85:13:B3:1B` às 4039 s).
+   Correção: `T_YIELD_SYS = 60000` para chamadas de controles do console.
+   Teste `test_pair_waits_for_pause` ajustado; 11/11 passando.
+
 ## Resultado dos testes
 
 Suíte completa no container `gcc:14` com `-D_DEFAULT_SOURCE` (Windows host via Docker),
