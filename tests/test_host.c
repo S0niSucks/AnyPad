@@ -365,7 +365,7 @@ static void test_pair_waits_for_pause(void)
     run(h, 25000);
     CHECK(sim_inquiries(sim) == 0);             /* no blind search during the pause */
     CHECK(s.connects == 0);
-    run(h, 6000);                               /* the pause is over */
+    run(h, 36000);                              /* the console's pad has the longer pause (T_YIELD_SYS) */
     CHECK(host_pair_wait_left(h) == 0);
     CHECK(host_pairing_left(h) >= 55);          /* the whole window, from now */
     CHECK(sim_inquiries(sim) >= 1);

@@ -1553,18 +1553,21 @@ static void on_event(host_t *h, const unsigned char *ev, int len)
                 }
                 /* This event came to us, so the system never saw the call:
                  * stand aside for a while, for the system to get the pad's
-                 * next attempt (about 22 s later). Not while one of our pads
+                 * next attempt (about 22 s later) and answer it whole: its
+                 * setup goes on past 30 s, so the pause for a pad of the
+                 * console is the longer one. Not while one of our pads
                  * is being linked; once the pause ends, the next call starts another. */
                 /* Never while searching: the pause would blind the search for
                  * the pad being paired. */
                 if (h->hci.ops->yield && now_ms() >= h->pair_until && !h->pair_pending_s &&
-                    now_ms() - h->yield_at > T_YIELD) {
+                    now_ms() - h->yield_at > h->yield_ms) {
                     int k, linking = 0;
                     for (k = 0; k < HOST_MAX_PADS; k++)
                         if (h->links[k].used && !h->links[k].ready) linking = 1;
                     if (!linking) {
+                        h->yield_ms = T_YIELD_SYS;
                         h->yield_at = now_ms();
-                        h->hci.ops->yield(h->hci.ctx, T_YIELD);
+                        h->hci.ops->yield(h->hci.ctx, T_YIELD_SYS);
                     }
                 }
                 break;
@@ -2092,7 +2095,7 @@ static int radio_wanted(const host_t *h, long now)
  * command now would get no reply. */
 static int yielding(const host_t *h, long now)
 {
-    return h->yield_at && now - h->yield_at < T_YIELD;
+    return h->yield_at && now - h->yield_at < h->yield_ms;
 }
 
 void host_poll(host_t *h, int timeout_ms)
@@ -2136,7 +2139,7 @@ void host_poll(host_t *h, int timeout_ms)
     /* While the events are left to the system on purpose (see yield), the
      * silence is ours: no probing, or the controller would be declared lost
      * and Bluetooth reopened in the middle of a search. */
-    if (h->yield_at && now - h->yield_at < T_YIELD + T_PROBE_IDLE) {
+    if (h->yield_at && now - h->yield_at < h->yield_ms + T_PROBE_IDLE) {
         h->probes = 0;
     } else if (now - h->last_rx > T_PROBE_IDLE) {
         if (h->probes >= PROBE_TRIES && now - h->probe_at > T_PROBE_WAIT) {
@@ -2234,9 +2237,9 @@ int host_pair(host_t *h, int seconds)
      * a search now would hear nothing until it ends and lose that part of
      * its window. It waits, and then gets its whole window. The pause itself
      * is kept: it protects the console's DualSense. */
-    if (h->yield_at && now - h->yield_at < T_YIELD) {
+    if (h->yield_at && now - h->yield_at < h->yield_ms) {
         h->pair_pending_s = seconds;
-        h->pair_wait_until = h->yield_at + T_YIELD;
+        h->pair_wait_until = h->yield_at + h->yield_ms;
         log_line("pairing: waits %ld s for the pause for the system to end, then searches for %d s",
                  (h->pair_wait_until - now + 999) / 1000, seconds);
         return 1;
@@ -2284,7 +2287,7 @@ int host_pause_left(const host_t *h)
     long left;
 
     if (!h->yield_at) return 0;
-    left = T_YIELD - (now_ms() - h->yield_at);
+    left = h->yield_ms - (now_ms() - h->yield_at);
     return left > 0 ? (int)((left + 999) / 1000) : 0;
 }
 
@@ -2527,6 +2530,7 @@ host_t *host_open(hci_t hci, const char *db_path, const host_events *ev)
     if (!h) return NULL;
     h->hci = hci;
     if (ev) h->ev = *ev;
+    h->yield_ms = T_YIELD;              /* until a call of the console's sets its own */
     snprintf(h->db_path, sizeof h->db_path, "%s", db_path);
     {
         const char *slash = strrchr(db_path, '/');

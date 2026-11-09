@@ -75,6 +75,11 @@
 #define T_SETUP_TIMEOUT 30000   /* connection to ready */
 #define T_YIELD         30000   /* events left to the system after a call that is not ours: longer than a
                                    * DualSense's ~22 s between attempts, so its next one reaches the system */
+#define T_YIELD_SYS     60000   /* ... but that next attempt still has to be *answered and set up* by the
+                                   * system (auth, HID channels), and 30 s ended in the middle of it: the
+                                   * rest was read here and the DualSense never finished connecting. A
+                                   * call from a pad of the console waits twice as long, for its retry
+                                   * and its whole setup */
 #define T_CHAN_CONNECT  2500
 #define T_CFG_RESEND    1200
 #define CFG_TRIES          6
@@ -313,6 +318,7 @@ struct host {
     long pair_until;
     long purge_at;                  /* when stale links were last cleared */
     long yield_at;                  /* when events were last left to the system */
+    long yield_ms;                  /* for how long they were (T_YIELD or T_YIELD_SYS) */
     int inquiring;
     unsigned char defer_rec[HOST_MAX_PADS][14]; /* pads found whose extended answer came empty (cut short) */
     long defer_at[HOST_MAX_PADS];     /* since when each waits for a complete one; 0: none */
