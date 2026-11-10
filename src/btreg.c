@@ -131,7 +131,7 @@ int main(void)
     int32_t (*reg_fn)(void *, ...);
     int r;
 
-    g_out = fopen("/data/btreg.log", "w");
+    g_out = fopen("/data/btfix-out/btreg.log", "w");
     setvbuf(stdout, NULL, _IOLBF, 0);
     log_ts("btreg: calling sceBluetoothHidRegisterDevice");
 

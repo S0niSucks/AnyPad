@@ -13,8 +13,10 @@
 #include <stdint.h>
 
 #include <sys/mman.h>
+#include <sys/stat.h>
 
 static FILE *g_out;
+static const char *k_outdir = "/data/btfix-out";
 
 static void log_ts(const char *fmt, ...)
 {
@@ -42,7 +44,7 @@ static void dump_mem(const char *name, uintptr_t addr, int before, int after)
     int pipefd[2];
     FILE *f;
 
-    snprintf(path, sizeof path, "/data/btdisasm_%s.bin", name);
+    snprintf(path, sizeof path, "%s/%s.bin", k_outdir, name);
 
     /* method 2: write() to a pipe — the kernel reads our memory via copyin */
     if (pipe(pipefd) == 0) {
@@ -89,8 +91,12 @@ int main(void)
 {
     void *lib;
     void *init_fn, *reg_fn, *unreg_fn, *info_fn;
+    char logpath[256];
 
-    g_out = fopen("/data/btdisasm.log", "w");
+    mkdir("/data/btfix-out", 0777);
+    mkdir("/data/btfix-out/dumps", 0777);
+    snprintf(logpath, sizeof logpath, "%s/btdisasm.log", k_outdir);
+    g_out = fopen(logpath, "w");
     setvbuf(stdout, NULL, _IOLBF, 0);
     log_ts("btdisasm: reading libSceBluetoothHid's decrypted code");
 

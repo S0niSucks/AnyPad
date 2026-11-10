@@ -249,8 +249,8 @@ static void scan_kernel_for_vids(void)
 
 int main(void)
 {
-    mkdir("/data/btfix", 0777);
-    g_out = fopen("/data/btfix/log.txt", "w");
+    mkdir("/data/btfix-out/dumps", 0777);
+    g_out = fopen("/data/btfix-out/btfix.log", "w");
     setvbuf(stdout, NULL, _IOLBF, 0);
     log_ts("btfix: finding and understanding Sony's Bluetooth stack");
 

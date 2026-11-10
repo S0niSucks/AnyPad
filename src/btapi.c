@@ -134,7 +134,7 @@ static int enumerate_exports(void *handle, const char *libname)
 
 int main(void)
 {
-    g_out = fopen("/data/btapi.log", "w");
+    g_out = fopen("/data/btfix-out/btapi.log", "w");
     setvbuf(stdout, NULL, _IOLBF, 0);
     log_ts("btapi: finding Sony's Bluetooth management APIs");
 

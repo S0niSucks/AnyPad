@@ -271,7 +271,7 @@ int main(void)
     long t_klog_try = 0;
 
     setvbuf(stdout, NULL, _IOLBF, 0);
-    g_out = fopen("/data/btmonitor.log", "w");
+    g_out = fopen("/data/btfix-out/btmonitor.log", "w");
     log_ts("btmonitor: watching the console's Bluetooth (no commands sent)");
 
     g_usb = usb_open();
