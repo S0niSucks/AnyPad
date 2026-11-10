@@ -618,6 +618,31 @@ static void start_identification(int slot)
     g_slot[slot].st = VP_PENDING;
 }
 
+/* Finds a virtual DualSense by asking the ones that might be it: when the
+ * kernel log is not available (no server, /dev/klog held by another), the
+ * AddDevice call still creates the device - we just don't know its handle.
+ * Virtual device handles seen on real consoles cluster around 0x?0301;
+ * each one answers scePadVirtualDeviceGetRemoteSetting, real pads don't. */
+static int32_t find_virtual_by_probing(void)
+{
+    /* the handles we or an earlier run may have created (observed: 0x10301,
+     * 0x30301, 0x70301, 0x80301...), plus the ones near them */
+    static const int32_t candidates[] = {
+        0x00010301, 0x00020301, 0x00030301, 0x00040301,
+        0x00050301, 0x00060301, 0x00070301, 0x00080301,
+        0x00090301, 0x000A0301, 0x000B0301, 0x000C0301,
+        0x000D0301, 0x000E0301, 0x000F0301,
+    };
+    int i;
+
+    for (i = 0; i < (int)(sizeof candidates / sizeof candidates[0]); i++) {
+        unsigned char buf[128];
+        int32_t r = scePadVirtualDeviceGetRemoteSetting(candidates[i], buf);
+        if (r == 0) return candidates[i];    /* it answered: a virtual pad */
+    }
+    return -1;
+}
+
 static void finish_identification(long now)
 {
     vslot *v = &g_slot[g_pending];
@@ -630,13 +655,23 @@ static void finish_identification(long now)
     g_pending = -1;
     log_source_close();
     if (g_matches != 1) {
-        /* Unknown or ambiguous: nothing is bound, inserted into or deleted. */
-        log_line("slot %d: virtual pad not identified (%d candidates), left alone", slot, g_matches);
-        v->st = VP_FAILED;
-        return;
+        /* The kernel log said nothing (or was not there at all): the virtual
+         * may still exist - try to find it by probing the handles that
+         * scePadVirtualDevice calls accept. */
+        int32_t probe = find_virtual_by_probing();
+        if (probe >= 0) {
+            log_line("slot %d: identified by probing: handle %#x", slot, (unsigned)probe);
+            v->dev = (uint64_t)(uint32_t)probe;
+            v->handle = probe;
+        } else {
+            log_line("slot %d: virtual pad not identified (%d candidates), left alone", slot, g_matches);
+            v->st = VP_FAILED;
+            return;
+        }
+    } else {
+        v->dev = g_match_dev;
+        v->handle = (int32_t)(g_match_dev & 0xFFFFFFFFu);
     }
-    v->dev = g_match_dev;
-    v->handle = (int32_t)(g_match_dev & 0xFFFFFFFFu);
     if (v->remove_when_found) {
         scePadVirtualDeviceDeleteDevice(v->handle);
         log_line("slot %d: device %#llx removed: its pad left meanwhile", slot,
