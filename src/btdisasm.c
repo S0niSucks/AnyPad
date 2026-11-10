@@ -28,28 +28,61 @@ static void log_ts(const char *fmt, ...)
     if (g_out) fflush(g_out);
 }
 
-/* Dump memory around an address (making the page readable first) */
+/* Dump memory around an address. We try three methods, because the SPRX
+ * code pages are execute-only and mprotect may not help on shared mappings:
+ *   1. direct read (fwrite)
+ *   2. via write() syscall to a pipe (kernel copyin may bypass protections)
+ *   3. via mprotect then direct read
+ */
 static void dump_mem(const char *name, uintptr_t addr, int before, int after)
 {
-    FILE *f;
     char path[256];
     unsigned char *p = (unsigned char *)addr;
-    uintptr_t page = addr & ~0xFFFULL;
     int total = before + after;
-
-    /* make the pages readable (they are execute-only by default) */
-    mprotect((void *)page, 0x3000, PROT_READ | PROT_EXEC);
+    int pipefd[2];
+    FILE *f;
 
     snprintf(path, sizeof path, "/data/btdisasm_%s.bin", name);
-    f = fopen(path, "wb");
-    if (!f) {
-        log_ts("  (cannot write %s: errno %d)", path, errno);
-        return;
+
+    /* method 2: write() to a pipe — the kernel reads our memory via copyin */
+    if (pipe(pipefd) == 0) {
+        int n = write(pipefd[1], p - before, total);
+        if (n > 0) {
+            unsigned char *buf = malloc(total);
+            int got = read(pipefd[0], buf, total);
+            close(pipefd[0]);
+            close(pipefd[1]);
+            if (got > 0) {
+                f = fopen(path, "wb");
+                if (f) {
+                    fwrite(buf, 1, got, f);
+                    fclose(f);
+                }
+                free(buf);
+                log_ts("  dumped %s via pipe: %d bytes → %s", name, got, path);
+                return;
+            }
+            free(buf);
+        }
+        close(pipefd[0]);
+        close(pipefd[1]);
     }
-    fwrite(p - before, 1, total, f);
-    fclose(f);
-    log_ts("  dumped %s: %p ± %d bytes (%d total) → %s",
-           name, (void *)addr, before, total, path);
+
+    /* method 3: mprotect then direct read */
+    {
+        uintptr_t page = (addr - before) & ~0xFFFULL;
+        size_t len = ((addr + after + 0xFFF) & ~0xFFFULL) - page;
+        if (mprotect((void *)page, len, PROT_READ | PROT_EXEC) == 0) {
+            f = fopen(path, "wb");
+            if (f) {
+                fwrite(p - before, 1, total, f);
+                fclose(f);
+                log_ts("  dumped %s via mprotect: %d bytes → %s", name, total, path);
+                return;
+            }
+        }
+        log_ts("  FAILED to dump %s (mprotect errno %d)", name, errno);
+    }
 }
 
 int main(void)
