@@ -2108,10 +2108,32 @@ void host_poll(host_t *h, int timeout_ms)
     pump(h, timeout_ms);
     now = now_ms();
     /* Event reads: all of them while pairing or waiting for a reply; while
-     * idle, as many as the dialog mode says (all, unless changed). */
+     * idle, as many as the dialog mode says (all, unless changed). With
+     * nothing of ours connected and no search going on, the chip is not
+     * ours to read at all: we stand fully aside, re-arming the pause in a
+     * roll, so a DualSense of the console meets only its own driver from
+     * its first page on (our pending reads had eaten that first page, and
+     * its next one fell just past the pause). A Pair, or one of our pads,
+     * takes the chip back at once; the search then waits out the last
+     * re-arm, as it waits any other pause for the system. */
     if (!h->dead) {
         int busy = pairing_busy(h, now) || now < h->full_reads_until;
-        reads_for(h, busy ? HOST_EV_READS : g_tune.idle_reads);
+        int ours = 0, k;
+        for (k = 0; k < HOST_MAX_PADS; k++) ours |= h->links[k].used;
+        if (!busy && !ours && !h->pair_pending_s && h->hci.ops->yield) {
+            if (h->idle_yield_at == 0)
+                h->idle_yield_at = now + 30000;         /* a grace period: the
+                                                          * state just changed */
+            else if (now >= h->idle_yield_at) {
+                h->idle_yield_at = now + 20000;
+                h->yield_ms = 30000;
+                h->yield_at = now;
+                h->hci.ops->yield(h->hci.ctx, 30000);
+            }
+        } else {
+            h->idle_yield_at = 0;
+            reads_for(h, busy ? HOST_EV_READS : g_tune.idle_reads);
+        }
     }
     /* First of all, so that what follows sees any event its replies brought. */
     if (!h->dead && !yielding(h, now)) {

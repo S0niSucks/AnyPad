@@ -365,7 +365,7 @@ static void test_pair_waits_for_pause(void)
     run(h, 25000);
     CHECK(sim_inquiries(sim) == 0);             /* no blind search during the pause */
     CHECK(s.connects == 0);
-    run(h, 36000);                              /* the console's pad has the longer pause (T_YIELD_SYS) */
+    run(h, 66000);                              /* the console's pad has the longer pause (T_YIELD_SYS) */
     CHECK(host_pair_wait_left(h) == 0);
     CHECK(host_pairing_left(h) >= 55);          /* the whole window, from now */
     CHECK(sim_inquiries(sim) >= 1);
@@ -879,10 +879,11 @@ static void test_unknown_call_left_alone(void)
     sim_t *sim;
     host_t *h;
     seen s;
-    int round, yields0 = sim_yields();
+    int round;
 
     printf("an unpaired caller is neither taken nor turned down\n");
     for (round = 0; round < 2; round++) {
+        int y0 = sim_yields();
         unlink(DB);
         memset(&pad, 0, sizeof pad);
         memset(&s, 0, sizeof s);
@@ -899,7 +900,9 @@ static void test_unknown_call_left_alone(void)
         CHECK(s.connects == 0);
         CHECK(!sim_link_up(sim));
         CHECK(sim_rejects(sim) == 0);
-        CHECK(sim_yields() - yields0 == 1);           /* stood aside for the system, but not while searching (round 1) */
+        /* stood aside for the system (round 0), but never while searching
+         * (round 1: the search keeps the chip, and the page waits) */
+        CHECK(sim_yields() - y0 == (round == 0 ? 1 : 0));
         run(h, 40000);                      /* the pause and after: not taken for a dead chip */
         CHECK(!host_transport_lost(h));
         host_close(h);
@@ -952,14 +955,23 @@ static void test_transport_lost(void)
     printf("a controller that stops answering is noticed\n");
     memset(&pad, 0, sizeof pad);
     memset(&s, 0, sizeof s);
-    pad.mode = SIM_RECONNECT;
+    pad.mode = SIM_WAIT_PAIRING;
     memcpy(pad.addr, addr, 6);
+    pad.cod = 0x002508;
+    pad.vid = 0x054C;
+    pad.pid = 0x05C4;
+    pad.report_len = ds4_report(pad.report);
+    pad.needs_output = 1;
     sim = sim_new(&pad);
     h = open_host(sim, &s);
+    /* Fully idle the chip is the system's and nothing is probed; with a pad
+     * of ours connected the reads are ours to hold, and it is then that a
+     * chip gone deaf is noticed and given up. */
+    host_pair(h, 30);
     run(h, 30000);
-    CHECK(!host_transport_lost(h));     /* idle but answering probes */
+    CHECK(s.connects == 1);
     sim_go_deaf(sim);
-    run(h, 30000);
+    run(h, 40000);
     CHECK(host_transport_lost(h));
     host_close(h);
     sim_free(sim);
