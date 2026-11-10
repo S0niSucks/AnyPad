@@ -44,6 +44,12 @@ void vpad_update(int slot, const pad_state *st);
  * that slot. Registered once, before the first vpad_poll(). */
 void vpad_set_output_sink(int (*set)(void *ud, int slot, const pad_output *out), void *ud);
 
+/* Keeps the console's kernel log mirrored into ours while AnyPad has
+ * nothing else to say, to watch the system's own Bluetooth at work (what
+ * it prints when a pad of its own tries to connect, beside our own events).
+ * Lines that look interesting are logged, with repeats held back. */
+void vpad_klog_observe(int on);
+
 /* Tests only: a slot made ready by hand, with this handle. */
 void vpad_test_slot_ready(int slot, int32_t handle);
 

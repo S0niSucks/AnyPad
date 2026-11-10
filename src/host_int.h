@@ -101,6 +101,8 @@
 #define PS_PAIR_WINDOW   0x0012 /* ...for 11.25 ms, the system's own light window */
 #define T_PS_CHECK       3000   /* while pairing, how often the page scan is looked at again */
 #define HOST_EV_READS      40   /* event reads the USB transport keeps (all of them) */
+#define HOST_ACL_READS     20   /* ACL reads, when the chip is ours to use (in step
+                                 * with hci_usb's N_ACL_RD) */
 #define T_PS_CHECK_IDLE  30000  /* with pads connected and no pairing, how often the page scan is looked at */
 #define TURNDOWN_TRIES      3   /* calls of the pad itself turned down in one search, to call it instead */
 #define T_TURNDOWN_WAIT  2000   /* between turning its call down and calling it (0.6.19: 700 was too soon for the 8BitDo) */
@@ -342,6 +344,7 @@ struct host {
     unsigned ps_set_iv, ps_set_win; /* the light page scan we wrote */
     long ps_restore_at;      /* putting it back failed: try again then */
     int reads_now;           /* event reads the transport keeps now */
+    int acl_now;             /* ACL reads the transport keeps now (idle: none) */
     long full_reads_until;   /* a command was sent: all reads until its reply can come */
     int reject_pending;      /* one of them was just turned down: is it really a call? */
     unsigned char reject_addr[6];

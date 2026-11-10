@@ -58,6 +58,8 @@ struct sim {
     int busy_radio;                 /* a heavy page scan leaves no time for searches and calls */
     unsigned char evmask[8];
     int ev_reads, left_to_system;   /* our event reads pending; events the "system" got */
+    int acl_reads;                  /* ACL reads of ours wanted (not gated: the sim's ACL
+                                      * queue is always ours) */
     int incoming_pending;           /* the pad's own call to the console waits for an answer */
     int links_made;
     int empty_left, sent_complete, early_calls, n_calls;     /* cut-short answers still to send; a complete one sent; calls made before it */
@@ -810,9 +812,10 @@ static void op_yield(void *ctx, int ms) { g_yields++; ((sim_t *)ctx)->yield_unti
 int sim_yields(void) { return g_yields; }
 
 static void op_event_reads(void *ctx, int n) { ((sim_t *)ctx)->ev_reads = n; }
+static void op_acl_reads(void *ctx, int n) { ((sim_t *)ctx)->acl_reads = n; }
 
 static const hci_ops k_sim_ops = {
-    op_cmd, op_acl_send, op_pump, op_next_event, op_next_acl, op_close, op_diag, op_yield, NULL, op_event_reads, NULL, NULL,
+    op_cmd, op_acl_send, op_pump, op_next_event, op_next_acl, op_close, op_diag, op_yield, NULL, op_event_reads, NULL, NULL, op_acl_reads,
 };
 
 /* ---- public ---------------------------------------------------------------- */

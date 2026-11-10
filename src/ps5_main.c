@@ -380,6 +380,7 @@ int main(void)
         notify(TR("AnyPad PS5: no se pueden crear mandos virtuales.\nVer el menu o el log. El Bluetooth no se ha tocado", "AnyPad PS5: cannot create virtual controllers.\nSee the menu or the log. Bluetooth was not touched"));
     } else {
         vpad_set_output_sink(on_pad_output, NULL);    /* rumble and light bar reach the pads */
+        vpad_klog_observe(1);                         /* the system's Bluetooth, watched in the log */
         if (vpad_session_active()) bt_begin();
         else {
             log_line("session: no signed-in user for virtual pads; Bluetooth left untouched");

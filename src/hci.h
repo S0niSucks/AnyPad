@@ -45,6 +45,11 @@ typedef struct hci_ops {
     /* Optional: the chip's USB vendor id (0x0E8D MediaTek, 0x1286
      * Marvell/NXP), 0 if not known. NULL: not known. */
     int  (*chip_vendor)(void *ctx);
+    /* Optional: keeps at most n ACL reads pending. The console's own pads
+     * reconnect through ACL traffic; every ACL read of ours armed while
+     * they do is a packet of theirs it will never see (measured: one armed
+     * ACL read alone breaks their reconnection). NULL: all stay. */
+    void (*acl_reads)(void *ctx, int n);
 } hci_ops;
 
 typedef struct {

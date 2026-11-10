@@ -74,6 +74,8 @@ typedef struct {
     long yield_until;               /* event reads left to the system until then */
     int ev_want;                    /* event reads to keep pending (dialog mode: fewer when idle) */
     int ev_len;                     /* length asked of each event read (dialog mode) */
+    int acl_want;                   /* ACL reads to keep pending (idle: none: they steal
+                                     * the setup traffic of the console's own pads) */
 
     char node[16];                  /* the device node in use */
 
@@ -283,7 +285,7 @@ static void keep_reads_pending(usb_ctx *c)
         topup_reads(c);
         for (i = 0; i < c->n_event && i < c->ev_want; i++)
             if (!c->busy[i]) xfer_start(c, i, c->ev_len);
-        for (i = 0; i < c->n_acl; i++)
+        for (i = 0; i < c->n_acl && i < c->acl_want; i++)
             if (!c->busy[N_EVENT_RD + i]) xfer_start(c, N_EVENT_RD + i, ACL_BUF);
     }
 }
@@ -405,6 +407,30 @@ static void op_event_reads(void *ctx, int n)
         ioctl(c->fd, USB_FS_STOP, &st);
     }
     reap(c);
+}
+
+/* The same for the ACL reads: while idle none are kept armed, for the
+ * console's pads reconnect through ACL traffic, and every read of ours
+ * armed then is a packet of theirs it will never see (measured on this
+ * chip: one armed ACL read alone breaks their reconnection). */
+static void op_acl_reads(void *ctx, int n)
+{
+    usb_ctx *c = ctx;
+    struct usb_fs_stop st;
+    int i;
+
+    if (n < 0) n = 0;
+    if (n > N_ACL_RD) n = N_ACL_RD;
+    if (n == c->acl_want) return;
+    c->acl_want = n;
+    for (i = n; i < c->n_acl; i++) {
+        if (!c->busy[N_EVENT_RD + i]) continue;
+        memset(&st, 0, sizeof st);
+        st.ep_index = (uint8_t)(N_EVENT_RD + i);
+        ioctl(c->fd, USB_FS_STOP, &st);
+    }
+    reap(c);
+    log_line("usb: %d ACL reads kept (%s)", n, n ? "ours" : "idle: the chip's ACL left to the system");
 }
 
 /* Leaves the chip to the system's driver for a while: our pending event AND
@@ -592,7 +618,7 @@ static int op_chip_vendor(void *ctx);
 
 static const hci_ops k_usb_ops = {
     op_cmd, op_acl_send, op_pump, op_next_event, op_next_acl, op_close, op_diag, op_yield, op_missing_reads,
-    op_event_reads, op_event_len, op_chip_vendor,
+    op_event_reads, op_event_len, op_chip_vendor, op_acl_reads,
 };
 
 /* Opens one device node and reads its device descriptor. */
@@ -696,7 +722,12 @@ int hci_usb_open(hci_t *out)
      * events, the system's stack included. ACL goes to the other one (0x02)
      * from the start; 0x01 only if there is no other. */
     if (c->out2_open) c->out_idx = X_ACL_OUT2;
-    c->ev_want = N_EVENT_RD;
+    /* From the first moment: one event read armed, no ACL. The console's
+     * stack reads beside us, and its own pads' transitions must not meet
+     * a wall of our reads (measured: even one ACL read armed breaks their
+     * reconnection). The host stack arms more when it has work of its own. */
+    c->ev_want = 1;
+    c->acl_want = 0;
     c->ev_len = c->ev_read_len;
     for (c->n_event = 0; c->n_event < N_EVENT_RD; c->n_event++)
         if (!xfer_open(c, c->n_event, c->ep_events, ACL_BUF)) break;

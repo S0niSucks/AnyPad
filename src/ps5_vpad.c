@@ -176,7 +176,6 @@ static int log_source_open(void)
 {
     struct sockaddr_in sin;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-
     if (fd >= 0) {
         memset(&sin, 0, sizeof sin);
         sin.sin_family = AF_INET;
@@ -264,6 +263,71 @@ static void log_source_read(void)
             if (g_matches == 0 || dev != g_match_dev) g_matches++;
         }
     }
+}
+
+/* ---- the system's own Bluetooth, watched ----------------------------------
+ *
+ * While AnyPad stands aside with nothing of its own on the chip, the kernel
+ * log is mirrored into ours: what the console prints as its Bluetooth works
+ * (a DualSense of its own connecting) is the other half of every diagnosis,
+ * beside our own lines. Only lines that may speak of it are kept, and a
+ * line repeated is held back for a second. */
+
+static int g_observe;
+static long g_observe_open_at, g_observe_hold_until;
+static char g_observe_last[LINE_MAX_LEN];
+
+static int klog_interesting(const char *s)
+{
+    static const char *const k[] = {
+        "luetooth", "hci", "HCI", "ugen", "usb", "USB",
+        "DUALSENSE", "ualSense", "mbus", "MBUS", "Mbus",
+        "LOGIN MGR", "SceShellUI", "ontroller", "evice", "error", "ERROR",
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof k / sizeof k[0]; i++)
+        if (strstr(s, k[i])) return 1;
+    return 0;
+}
+
+static void observe_read(long now)
+{
+    char buf[1024];
+    int rounds, kept = 0;
+
+    if (!g_observe) return;
+    if (g_log_fd < 0) {                       /* the one reader is taken, or none: try again later */
+        if (now >= g_observe_open_at) {
+            g_observe_open_at = now + 30000;
+            g_log_fd = log_source_open();
+        }
+        return;
+    }
+    for (rounds = 0; rounds < 8 && kept < 40; rounds++) {
+        ssize_t n = read(g_log_fd, buf, sizeof buf), i;
+        if (n <= 0) return;
+        for (i = 0; i < n && kept < 40; i++) {
+            if (buf[i] != '\n' && g_line_len < sizeof g_line - 1) {
+                g_line[g_line_len++] = buf[i];
+                continue;
+            }
+            g_line[g_line_len] = '\0';
+            g_line_len = 0;
+            if (!klog_interesting(g_line)) continue;
+            if (strcmp(g_line, g_observe_last) == 0 && now < g_observe_hold_until) continue;
+            snprintf(g_observe_last, sizeof g_observe_last, "%s", g_line);
+            g_observe_hold_until = now + 1000;
+            log_line("sys: %s", g_line);
+            kept++;
+        }
+    }
+}
+
+void vpad_klog_observe(int on)
+{
+    g_observe = on;
+    if (!on && g_log_fd >= 0 && g_pending < 0) log_source_close();
 }
 
 /* ---- users and privileges ---------------------------------------------------- */
@@ -475,6 +539,7 @@ static void start_identification(int slot)
         g_slot[slot].st = VP_FAILED;
         return;
     }
+    if (g_log_fd >= 0) log_source_close();    /* the observer's, if it was open */
     g_log_fd = log_source_open();
     if (g_log_fd < 0) {
         g_slot[slot].st = VP_FAILED;
@@ -629,6 +694,7 @@ void vpad_poll(long now)
         finish_identification(now);
         return;
     }
+    observe_read(now);                        /* the system's own doings, beside ours */
     for (i = 0; i < HOST_MAX_PADS; i++)
         if (g_slot[i].st == VP_QUEUED) {
             start_identification(i);

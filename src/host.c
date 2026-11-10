@@ -53,6 +53,16 @@ static void reads_for(host_t *h, int n)
     h->reads_now = n;
 }
 
+/* ACL reads are armed only while the chip is ours to use (a search, a pad
+ * of ours connected): the console's own pads reconnect through ACL traffic,
+ * and ours armed meanwhile steals it. */
+static void acl_reads_for(host_t *h, int n)
+{
+    if (n == h->acl_now || !h->hci.ops->acl_reads) return;
+    h->hci.ops->acl_reads(h->hci.ctx, n);
+    h->acl_now = n;
+}
+
 int send_cmd(host_t *h, unsigned op, const void *p, int len)
 {
     if (h->reads_now < HOST_EV_READS) {
@@ -2121,6 +2131,11 @@ void host_poll(host_t *h, int timeout_ms)
         int ours = 0, k;
         for (k = 0; k < HOST_MAX_PADS; k++) ours |= h->links[k].used;
         if (!busy && !ours && !h->pair_pending_s && h->hci.ops->yield) {
+            /* Even before the pause begins (its grace), next to nothing is
+             * armed: one event read answers our own commands and lets a
+             * first stranger's call be seen; no ACL read at all. */
+            reads_for(h, 1);
+            acl_reads_for(h, 0);
             if (h->idle_yield_at == 0)
                 h->idle_yield_at = now + 30000;         /* a grace period: the
                                                           * state just changed */
@@ -2133,6 +2148,7 @@ void host_poll(host_t *h, int timeout_ms)
         } else {
             h->idle_yield_at = 0;
             reads_for(h, busy ? HOST_EV_READS : g_tune.idle_reads);
+            acl_reads_for(h, HOST_ACL_READS);
         }
     }
     /* First of all, so that what follows sees any event its replies brought. */
