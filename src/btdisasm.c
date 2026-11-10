@@ -12,6 +12,8 @@
 #include <dlfcn.h>
 #include <stdint.h>
 
+#include <sys/mman.h>
+
 static FILE *g_out;
 
 static void log_ts(const char *fmt, ...)
@@ -26,13 +28,17 @@ static void log_ts(const char *fmt, ...)
     if (g_out) fflush(g_out);
 }
 
-/* Dump memory around an address */
+/* Dump memory around an address (making the page readable first) */
 static void dump_mem(const char *name, uintptr_t addr, int before, int after)
 {
     FILE *f;
     char path[256];
     unsigned char *p = (unsigned char *)addr;
+    uintptr_t page = addr & ~0xFFFULL;
     int total = before + after;
+
+    /* make the pages readable (they are execute-only by default) */
+    mprotect((void *)page, 0x3000, PROT_READ | PROT_EXEC);
 
     snprintf(path, sizeof path, "/data/btdisasm_%s.bin", name);
     f = fopen(path, "wb");
