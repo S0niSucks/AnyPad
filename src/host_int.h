@@ -255,6 +255,7 @@ typedef struct {
     char name[32];                  /* the name it gave in the search (EIR), "" if none */
     uint32_t cod;                   /* its class of device, 0 if not known */
     int announced;                  /* its virtual DualSense exists: created at its first input */
+    long t_announce;                /* when the virtual was asked for / last confirmed alive */
     unsigned char seen_id[4];       /* the report ids it has sent, for the log */
     int seen_n[4];
     int pin_zero;                   /* "0000" was its PIN (legacy pairing) */

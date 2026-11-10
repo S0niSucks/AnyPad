@@ -988,6 +988,7 @@ void link_input(host_t *h, link_t *l, const unsigned char *rep, int len)
     }
     if (r == PARSE_FULL) l->full = 1;
     if (r != PARSE_NONE && l->ready && !l->announced) announce(h, l, rep[0], len);
+    if (r != PARSE_NONE && l->ready) l->t_announce = now_ms();    /* alive: the prune holds */
     if (r != PARSE_NONE && l->ready && h->ev.on_state)
         h->ev.on_state(h->ev.ud, slot_of(h, l), &l->st);
 }
@@ -1009,23 +1010,36 @@ void link_ready(host_t *h, link_t *l)
     memcpy(info.addr, l->addr, 6);
     (void)info;
     log_line("pad %s: ready as %s in slot %d", addr_str(l->addr), l->prof->name, slot_of(h, l));
+    /* The virtual DualSense is asked for at once: the pad appears on the
+     * console's user screen the moment it is ready, not when it is first
+     * pressed. A pad that stays silent is pruned by announce_prune(). */
+    announce(h, l, 0, 0);
 }
 
-/* The pad's virtual DualSense is created at its first input, not when its
- * link is ready: a pad that links but stays silent (the 8BitDo coming back
- * from sleep) would otherwise leave a virtual pad that never moves, and
- * the console's user screen would wait on it and take no other pad. */
+/* The pad's virtual DualSense: asked for in link_ready (the pad appears on
+ * the console's user screen the moment it is ready). If no real input comes
+ * within ANNOUNCE_PRUNE_MS, the virtual is taken back - a pad that links
+ * but stays silent (the 8BitDo coming back from sleep) must not leave a
+ * virtual pad that never moves and blocks the user screen. */
+#define ANNOUNCE_PRUNE_MS 30000
+
 static void announce(host_t *h, link_t *l, int report_id, int len)
 {
     pad_info info;
 
+    if (l->announced) return;                    /* already out there */
     l->announced = 1;
+    l->t_announce = now_ms();
     memset(&info, 0, sizeof info);
     info.vid = l->vid;
     info.pid = l->pid;
     info.profile = l->prof->name;
     memcpy(info.addr, l->addr, 6);
-    log_line("pad %s: first input (report %#04x, %d bytes): virtual DualSense requested (bind pending)", addr_str(l->addr), report_id, len);
+    if (report_id)
+        log_line("pad %s: first input (report %#04x, %d bytes): virtual DualSense requested (bind pending)",
+                 addr_str(l->addr), report_id, len);
+    else
+        log_line("pad %s: ready, virtual DualSense requested at once (bind pending)", addr_str(l->addr));
     if (h->ev.on_connect) h->ev.on_connect(h->ev.ud, slot_of(h, l), &info);
 }
 
@@ -2169,6 +2183,18 @@ void host_poll(host_t *h, int timeout_ms)
         link_step(h, &h->links[i], now);
         if (h->links[i].used && h->links[i].pairing && !h->links[i].ready &&
             !h->links[i].le) linking = 1;
+        /* A virtual DualSense whose pad never spoke (nor spoke again for a
+         * long while) is taken back: a pad that links but stays silent must
+         * not block the console's user screen with a virtual that never moves. */
+        if (h->links[i].used && h->links[i].ready && h->links[i].announced &&
+            now - h->links[i].t_announce > ANNOUNCE_PRUNE_MS) {
+            log_line("pad %s: silent since its virtual was made: taking it back",
+                     addr_str(h->links[i].addr));
+            if (h->ev.on_disconnect) h->ev.on_disconnect(h->ev.ud, i);
+            h->links[i].announced = 0;
+            /* not link_free: the pad itself stays connected; if it speaks,
+             * announce() runs again and the virtual is recreated */
+        }
     }
     le_poll(h, now);
 

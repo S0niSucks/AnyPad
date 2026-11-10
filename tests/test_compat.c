@@ -460,14 +460,18 @@ static void test_silent_pad_no_virtual(void)
     host_pair(h, 30);
     run(h, 12000);
     CHECK(sim_link_up(sim));
-    CHECK(s.connects == 0);             /* nothing for the console's user screen to wait on */
+    CHECK(s.connects == 1);             /* the virtual is asked for at once now */
     memset(rep, 0, sizeof rep);
     rep[0] = 0x30; rep[3] = 0x04; rep[7] = rep[10] = 8; rep[8] = rep[11] = 0x80;
     sim_set_report(sim, rep, sizeof rep);
     run(h, 2000);
-    CHECK(s.connects == 1);             /* it spoke: now it has one */
+    CHECK(s.connects == 1);             /* it spoke: the virtual stays */
     CHECK(s.last.buttons & 0x4000);
     printf("  connects %d after it spoke\n", s.connects);
+    /* and a pad that goes silent has its virtual taken back */
+    sim_set_report(sim, NULL, 0);       /* mute: nothing more comes */
+    run(h, 35000);
+    CHECK(s.disconnects == 1);          /* pruned after ANNOUNCE_PRUNE_MS */
     host_close(h);
     sim_free(sim);
 }
