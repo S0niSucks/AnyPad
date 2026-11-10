@@ -99,6 +99,11 @@ int32_t scePadClose(int32_t handle);
 int32_t scePadMbusInit(void);
 int32_t scePadMbusTerm(void);
 
+int32_t sceUserServiceInitialize(void *params);
+int32_t sceUserServiceGetInitialUser(int32_t *user);
+int32_t sceUserServiceGetForegroundUser(int32_t *user);
+int32_t sceUserServiceGetLoginUserIdList(int32_t list[4]);
+
 typedef int32_t (*mbus_bind_fn)(uint64_t device_id, int32_t user);
 
 static void *g_mbus_lib;
@@ -157,7 +162,7 @@ static const char *const k_pad_names[] = {
 
 int main(void)
 {
-    int32_t pad_handle;
+    int32_t pad_handle = -1;
     int64_t device_id;
     unsigned char info[128];
     int32_t capability = -1;
@@ -196,6 +201,18 @@ int main(void)
     }
 
     /* Pad init */
+    log_ts("-- user and pad init:");
+    {
+        int32_t init_user = -1, fore_user = -1, login[4] = { -1, -1, -1, -1 };
+        CHECK(sceUserServiceInitialize(NULL), "UserServiceInitialize");
+        CHECK(sceUserServiceGetInitialUser(&init_user), "GetInitialUser");
+        CHECK(sceUserServiceGetForegroundUser(&fore_user), "GetForegroundUser");
+        CHECK(sceUserServiceGetLoginUserIdList(login), "GetLoginUserIdList");
+        log_ts("  initial=%#x, foreground=%#x, login: %#x %#x %#x %#x",
+               (unsigned)init_user, (unsigned)fore_user,
+               (unsigned)login[0], (unsigned)login[1],
+               (unsigned)login[2], (unsigned)login[3]);
+    }
     CHECK(scePadInit(), "scePadInit");
     CHECK(scePadSetProcessPrivilege(1), "scePadSetProcessPrivilege");
     CHECK(scePadMbusInit(), "scePadMbusInit");
@@ -338,11 +355,19 @@ int main(void)
     /* what a real pad looks like (if one is connected) */
     log_ts("-- real pad (if connected):");
     {
-        /* try every user index 0-3 and type 0 (standard pad) */
-        int u;
-        for (u = 0; u < 4; u++) {
-            pad_handle = scePadGetHandle(u, 0, 0);
-            log_ts("  GetHandle(user %d): %d", u, (int)pad_handle);
+        int32_t init_user = -1, fore_user = -1;
+        int32_t try_user;
+
+        sceUserServiceGetForegroundUser(&fore_user);
+        sceUserServiceGetInitialUser(&init_user);
+        try_user = fore_user != -1 ? fore_user : init_user;
+
+        if (try_user == -1) {
+            log_ts("  no user to look up (initial=%#x foreground=%#x)",
+                   (unsigned)init_user, (unsigned)fore_user);
+        } else {
+            pad_handle = scePadGetHandle(try_user, 0, 0);
+            log_ts("  GetHandle(user %#x): %d", (unsigned)try_user, (int)pad_handle);
             if (pad_handle >= 0) {
                 int32_t cap = -1;
                 scePadGetCapability(pad_handle, &cap);
@@ -368,7 +393,6 @@ int main(void)
                 device_id = 0;
                 CHECK(scePadGetDeviceId(pad_handle, &device_id), "real GetDeviceId");
                 log_ts("  real deviceId: %#llx", (unsigned long long)device_id);
-                break;
             }
         }
         if (pad_handle < 0) log_ts("  no real pad found");
