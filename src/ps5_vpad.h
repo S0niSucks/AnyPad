@@ -39,6 +39,10 @@ int  vpad_live(int slot);
 
 void vpad_update(int slot, const pad_state *st);
 
+/* The console's own pads' link events, from bthid's notification device:
+ * an independent view of the system's Bluetooth, beside our own lines. */
+void vpad_btdev_poll(void);
+
 /* What the console asks of a virtual DualSense (rumble, light bar), polled
  * by vpad_poll(): each new wish is handed to `set` for the Bluetooth pad of
  * that slot. Registered once, before the first vpad_poll(). */

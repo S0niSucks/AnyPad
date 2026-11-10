@@ -404,6 +404,7 @@ int main(void)
         now = now_ms();
         web_poll(g_web);
         if (g_vpad_ok) vpad_poll(now);
+        if (g_vpad_ok) vpad_btdev_poll();
 
         /* The page follows the network, as Payload Manager's does: every 5 s the
          * console's address is looked at and the page is served again if the

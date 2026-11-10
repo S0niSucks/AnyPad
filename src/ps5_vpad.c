@@ -12,6 +12,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/ioctl.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -328,6 +329,54 @@ void vpad_klog_observe(int on)
 {
     g_observe = on;
     if (!on && g_log_fd >= 0 && g_pending < 0) log_source_close();
+}
+
+/* ---- the console's Bluetooth, watched ----------------------------------
+ *
+ * /dev/bt: bthid's notification device. Registered with its ioctl, it
+ * reports the system's own pads' link events (16-byte messages whose type
+ * byte says connect/disconnect/...) - an independent signal of the system's
+ * transitions, timestamped beside our own lines. The chip is never touched;
+ * process names, when the system prints them, come from the klog observer.
+ */
+
+static int g_btdev = -1;
+
+static void btdev_open(void)
+{
+    unsigned int reg[2] = { 0x044f, 0x1000 };   /* the pair bthid asks for */
+    int fd = open("/dev/bt", O_RDWR | O_NONBLOCK);
+
+    if (fd < 0) {
+        log_line("btdev: /dev/bt errno %d", errno);
+        return;
+    }
+    if (ioctl(fd, 0x8004622b, reg) != 0) {
+        log_line("btdev: register ioctl errno %d", errno);
+        close(fd);
+        return;
+    }
+    g_btdev = fd;
+    log_line("btdev: /dev/bt registered (pair %04x %04x)", reg[0], reg[1]);
+}
+
+static void btdev_poll(void)
+{
+    unsigned char ev[16];
+    int n;
+
+    if (g_btdev < 0) return;
+    while ((n = (int)read(g_btdev, ev, sizeof ev)) > 0)
+        log_line("btdev: %d bytes, type %#02x %02x %02x %02x", n, ev[0],
+                 n > 1 ? ev[1] : 0, n > 2 ? ev[2] : 0, n > 3 ? ev[3] : 0);
+}
+
+/* The system's own pads' link events, polled from the main loop. The
+ * device is asked for once and then read without ever touching the chip. */
+void vpad_btdev_poll(void)
+{
+    if (g_btdev < 0) btdev_open();
+    btdev_poll();
 }
 
 /* ---- users and privileges ---------------------------------------------------- */
