@@ -20,6 +20,41 @@
 #include <stdarg.h>
 #include <dlfcn.h>
 #include <stdint.h>
+#include <unistd.h>
+#include <sys/types.h>
+
+/* From the payload SDK (ps5/kernel.h). */
+uint64_t kernel_get_ucred_authid(pid_t pid);
+int32_t  kernel_set_ucred_authid(pid_t pid, uint64_t authid);
+int32_t  kernel_get_ucred_caps(pid_t pid, uint8_t caps[16]);
+int32_t  kernel_set_ucred_caps(pid_t pid, const uint8_t caps[16]);
+
+static uint64_t g_orig_authid;
+static uint8_t g_orig_caps[16];
+static int g_have_orig;
+static int g_raised;
+
+static int creds_raise(void)
+{
+    static const uint8_t caps[16] = {
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    };
+    pid_t me = getpid();
+    uint8_t now[16];
+
+    if (!g_have_orig) {
+        g_orig_authid = kernel_get_ucred_authid(me);
+        if (!g_orig_authid || kernel_get_ucred_caps(me, g_orig_caps) != 0) return 0;
+        g_have_orig = 1;
+    }
+    if (kernel_set_ucred_authid(me, 0x3800000000010003ull) != 0 ||
+        kernel_set_ucred_caps(me, caps) != 0 ||
+        kernel_get_ucred_authid(me) != 0x3800000000010003ull ||
+        kernel_get_ucred_caps(me, now) != 0 || memcmp(now, caps, 16) != 0) return 0;
+    g_raised = 1;
+    return 1;
+}
 
 /* ---- logging ----------------------------------------------------------- */
 
@@ -132,6 +167,14 @@ int main(void)
     g_out = fopen("/data/mbusprobe.log", "w");
     setvbuf(stdout, NULL, _IOLBF, 0);
     log_ts("mbusprobe: finding the injection point into the pad pipeline");
+
+    /* raise credentials first: without them, MBus refuses everything */
+    if (!creds_raise()) {
+        log_ts("FATAL: could not raise credentials; run from the payload loader");
+        if (g_out) fclose(g_out);
+        return 1;
+    }
+    log_ts("credentials raised (authid 0x3800000000010003)");
 
     /* libSceMbus: loaded by libScePad's import, or by us */
     g_mbus_lib = dlopen("/system/common/lib/libSceMbus.sprx", RTLD_NOW | RTLD_GLOBAL);
@@ -295,34 +338,94 @@ int main(void)
     /* what a real pad looks like (if one is connected) */
     log_ts("-- real pad (if connected):");
     {
-        pad_handle = scePadGetHandle(0, 0, 0);
-        if (pad_handle >= 0) {
-            int32_t cap = -1;
-            scePadGetCapability(pad_handle, &cap);
-            log_ts("  handle %d: capability %#x", (int)pad_handle, (unsigned)cap);
+        /* try every user index 0-3 and type 0 (standard pad) */
+        int u;
+        for (u = 0; u < 4; u++) {
+            pad_handle = scePadGetHandle(u, 0, 0);
+            log_ts("  GetHandle(user %d): %d", u, (int)pad_handle);
+            if (pad_handle >= 0) {
+                int32_t cap = -1;
+                scePadGetCapability(pad_handle, &cap);
+                log_ts("  handle %d: capability %#x", (int)pad_handle, (unsigned)cap);
 
-            memset(bt_addr, 0, sizeof bt_addr);
-            CHECK(scePadGetBluetoothAddress(pad_handle, bt_addr), "real GetBluetoothAddress");
-            log_ts("  real BT addr: %08x %08x %08x %08x",
-                   (unsigned)bt_addr[0], (unsigned)bt_addr[1],
-                   (unsigned)bt_addr[2], (unsigned)bt_addr[3]);
+                memset(bt_addr, 0, sizeof bt_addr);
+                CHECK(scePadGetBluetoothAddress(pad_handle, bt_addr), "real GetBluetoothAddress");
+                log_ts("  real BT addr: %08x %08x %08x %08x",
+                       (unsigned)bt_addr[0], (unsigned)bt_addr[1],
+                       (unsigned)bt_addr[2], (unsigned)bt_addr[3]);
 
-            memset(info, 0, sizeof info);
-            CHECK(scePadGetControllerInformation(pad_handle, info), "real GetControllerInformation");
-            {
-                unsigned char *b = (unsigned char *)info;
-                char hex[3 * 32 + 1];
-                int k;
-                for (k = 0; k < 32; k++) snprintf(hex + 3 * k, 4, "%02x ", b[k]);
-                hex[3 * 32] = 0;
-                log_ts("  real controllerInfo: %s", hex);
+                memset(info, 0, sizeof info);
+                CHECK(scePadGetControllerInformation(pad_handle, info), "real GetControllerInformation");
+                {
+                    unsigned char *b = (unsigned char *)info;
+                    char hex[3 * 32 + 1];
+                    int k;
+                    for (k = 0; k < 32; k++) snprintf(hex + 3 * k, 4, "%02x ", b[k]);
+                    hex[3 * 32] = 0;
+                    log_ts("  real controllerInfo: %s", hex);
+                }
+
+                device_id = 0;
+                CHECK(scePadGetDeviceId(pad_handle, &device_id), "real GetDeviceId");
+                log_ts("  real deviceId: %#llx", (unsigned long long)device_id);
+                break;
             }
+        }
+        if (pad_handle < 0) log_ts("  no real pad found");
+    }
 
-            device_id = 0;
-            CHECK(scePadGetDeviceId(pad_handle, &device_id), "real GetDeviceId");
-            log_ts("  real deviceId: %#llx", (unsigned long long)device_id);
+    /* try the typo version: scePadVertualDeviceAddDevice */
+    log_ts("-- scePadVertualDeviceAddDevice (the typo legacy):");
+    {
+        typedef int32_t (*vertual_fn)(void *, int32_t);
+        vertual_fn fn = (vertual_fn)dlsym(RTLD_DEFAULT, "scePadVertualDeviceAddDevice");
+        if (fn) {
+            int32_t param[8];
+            int i;
+            for (i = 0; i < 8; i++) param[i] = (int32_t)0xDEADBEEF;
+            param[0] = (int32_t)sizeof param;
+            param[1] = 1;
+            r = fn(param, 3);
+            log_ts("  VertualAddDevice(param, 3): %#x", (unsigned)r);
+            log_ts("  param out: %08x %08x %08x %08x %08x %08x",
+                   (unsigned)param[2], (unsigned)param[3], (unsigned)param[4],
+                   (unsigned)param[5], (unsigned)param[6], (unsigned)param[7]);
+            if (r == 0 && param[2] != (int32_t)0xDEADBEEF) {
+                int32_t cap = -1;
+                scePadGetCapability(param[2], &cap);
+                log_ts("  capability: %#x", (unsigned)cap);
+                scePadVirtualDeviceDeleteDevice(param[2]);
+            }
         } else {
-            log_ts("  no real pad found (handle %d)", (int)pad_handle);
+            log_ts("  not found via dlsym");
+        }
+    }
+
+    /* try scePadRemoteControlInsertData (a different input path?) */
+    log_ts("-- scePadRemoteControlInsertData:");
+    {
+        typedef int32_t (*rc_fn)(int32_t, const void *, int32_t);
+        rc_fn fn = (rc_fn)dlsym(RTLD_DEFAULT, "scePadRemoteControlInsertData");
+        if (fn) {
+            unsigned char data[120] = { 0 };
+            /* just try with zeros to see if it takes a handle */
+            log_ts("  found at %p (not called: need a valid handle first)", fn);
+        } else {
+            log_ts("  not found");
+        }
+    }
+
+    /* try scePadOutputReport on the virtual (if we have one) */
+    /* (already covered above if AddDevice succeeded) */
+
+    /* check scePadGetCapability on the first real handle for reference */
+    log_ts("-- scePadGetCapability on all handles:");
+    {
+        int h;
+        for (h = 0; h < 8; h++) {
+            int32_t cap = -1;
+            r = scePadGetCapability(h, &cap);
+            if (r == 0) log_ts("  handle %d: capability %#x", h, (unsigned)cap);
         }
     }
 
