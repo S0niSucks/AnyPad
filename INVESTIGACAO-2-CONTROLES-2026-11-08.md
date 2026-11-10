@@ -102,6 +102,31 @@ Logs reais (`anypad.log` de duas sessões) confirmaram:
    material. Caminho: extrair os módulos do PUP 13.60 e localizar o driver que lê
    `ugen0.2`.
 
+## Linha de pesquisa alternativa (se ainda falhar): os dumps e a web
+
+- Dumps de kernel/A53 em `kstuff-debug-evidence/2026-10-15` **não contêm** a pilha BT do
+  sistema (kernel dump vazio — `/dev/mp4/dump` gated; zero strings BT no kernel ELF e no
+  firmware A53). O daemon BT vive nos SPRXs do firmware 13.60 (PUP completo em
+  `D:\leonardommello\PS5\13.60.PUP`, ainda não extraído).
+- **Web — fontes que mudaram o diagnóstico** (2026-11-10):
+  - **BlueV** (github.com/0xZ3n0x/BlueV, `docs/shared-chip.md`): medições empíricas da
+    coexistência neste chip — **1 leitura ACL armada já quebra a reconexão** dos pads do
+    console; 1 leitura de evento é inofensiva; 4+ eventos quebram; sem modo promíscuo
+    (cada pacote vai a exatamente um leitor); **o travamento persiste até reboot** (o
+    chip processa um comando por vez; resposta perdida trava a pilha do sistema, incluindo
+    o Accept Connection do DualSense). DualSense já conectado não usa esses endpoints —
+    só transições quebram. → Base do fix `2643ec6` (1 evento + 0 ACL quando ocioso).
+  - **OmniPad-CE** (github.com/jpemendonca/OmniPad-CE, continuação do OmniPad-PS5, que
+    usa o código BT do AnyPad via fork BearTS/PR18): **abandonaram o chip interno** —
+    "Bluetooth through your own USB adapter, so the DualSense keeps the console's internal
+    radio"; recomendam TP-Link UB500 (RTL8761B). Plano B comprovado do ecossistema.
+  - **OneFamily** (PS4): allowlist de controladores no kernel Orbis — causa da mensagem
+    "não compatível" quando o link sobe sem registro válido.
+  - **GIMX/eleccelerator/psdevwiki** (RE DS4): sequência HCI de reconexão e link key por
+    USB HID 0x13.
+  - Não existe público: RE da pilota BT do PS5 por pesquisadores conhecidos, ou sniffing
+    passivo no ugen.
+
 ## Resultado dos testes
 
 Suíte completa no container `gcc:14` com `-D_DEFAULT_SOURCE` (Windows host via Docker),
