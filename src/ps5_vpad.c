@@ -280,9 +280,9 @@ static char g_observe_last[LINE_MAX_LEN];
 static int klog_interesting(const char *s)
 {
     static const char *const k[] = {
-        "luetooth", "hci", "HCI", "ugen", "usb", "USB",
-        "DUALSENSE", "ualSense", "mbus", "MBUS", "Mbus",
-        "LOGIN MGR", "SceShellUI", "ontroller", "evice", "error", "ERROR",
+        "uetooth", "hci", "HCI", "ugen", "SceBt", "sce_bt",
+        "DUALSENSE", "ualSense", "bthid", "BT_",
+        "mbus", "MBUS", "Mbus", "LOGIN MGR", "[Umm]",
     };
     size_t i;
 
