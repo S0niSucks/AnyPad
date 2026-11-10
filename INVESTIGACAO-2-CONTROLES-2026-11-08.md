@@ -84,6 +84,24 @@ Logs reais (`anypad.log` de duas sessões) confirmaram:
    Correção: `T_YIELD_SYS = 60000` para chamadas de controles do console.
    Teste `test_pair_waits_for_pause` ajustado; 11/11 passando.
 
+## Validação no console (2026-11-09, build ee9c6ea em teste)
+
+3. **"Dispositivo não compatível" ao ligar DualSense do console com AnyPad rodando**
+   (builds 0720217/2148d8c): o evento chegava ao sistema (yield de 60 s), mas o AnyPad
+   mantinha **suas leituras de ACL ativas** e engolia o tráfego do setup do DualSense
+   (link key, L2CAP, HID) → o sistema não completava e rejeitava como desconhecido;
+   o pad re-chamava a cada 2–5 min. **Sem AnyPad, ambos conectam perfeitamente**
+   (confirmado pelo usuário). Correção `ee9c6ea`: o yield agora para **e não renova
+   também as leituras de ACL** — durante a janela, o driver do sistema é o único
+   leitor do chip. Custo: input dos pads do AnyPad pausa até 60 s nessa janela.
+
+   Linha de pesquisa alternativa (se ainda falhar): os dumps de kernel/A53 em
+   `kstuff-debug-evidence/2026-10-15` **não contêm** a pilha BT do sistema (kernel
+   dump vazio — `/dev/mp4/dump` gated; zero strings BT no kernel ELF e no firmware
+   A53). O daemon BT vive nos SPRXs do firmware 13.60, ainda não extraídos nesse
+   material. Caminho: extrair os módulos do PUP 13.60 e localizar o driver que lê
+   `ugen0.2`.
+
 ## Resultado dos testes
 
 Suíte completa no container `gcc:14` com `-D_DEFAULT_SOURCE` (Windows host via Docker),
