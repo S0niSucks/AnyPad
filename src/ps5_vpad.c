@@ -341,22 +341,28 @@ void vpad_klog_observe(int on)
  */
 
 static int g_btdev = -1;
+static long g_btdev_try_at;                 /* when to try opening again (backoff) */
 
 static void btdev_open(void)
 {
-    unsigned int reg[2] = { 0x044f, 0x1000 };   /* the pair bthid asks for */
-    int fd = open("/dev/bt", O_RDWR | O_NONBLOCK);
+    unsigned int reg[2] = { 0x044f, 0x1000 };
+    int fd;
 
+    if (g_btdev >= 0 || now_ms() < g_btdev_try_at) return;
+    g_btdev_try_at = now_ms() + 300000;     /* at most once every 5 minutes */
+
+    fd = open("/dev/bt", O_RDWR | O_NONBLOCK);
     if (fd < 0) {
         log_line("btdev: /dev/bt errno %d", errno);
         return;
     }
     if (ioctl(fd, 0x8004622b, reg) != 0) {
-        log_line("btdev: register ioctl errno %d", errno);
+        log_line("btdev: register ioctl errno %d (pair %04x %04x)", errno, reg[0], reg[1]);
         close(fd);
         return;
     }
     g_btdev = fd;
+    g_btdev_try_at = 0;                     /* it worked: no backoff needed */
     log_line("btdev: /dev/bt registered (pair %04x %04x)", reg[0], reg[1]);
 }
 
