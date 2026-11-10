@@ -73,7 +73,7 @@
 #define T_INTR_AFTER     500    /* interrupt channel after control */
 #define T_CONN_TIMEOUT 20000    /* paging a pad */
 #define T_SETUP_TIMEOUT 30000   /* connection to ready */
-#define T_YIELD         30000   /* events left to the system after a call that is not ours: longer than a
+#define T_YIELD         30000   /* the chip left to the system after a call that is not ours: longer than a
                                    * DualSense's ~22 s between attempts, so its next one reaches the system */
 #define T_YIELD_SYS     60000   /* ... but that next attempt still has to be *answered and set up* by the
                                    * system (auth, HID channels), and 30 s ended in the middle of it: the

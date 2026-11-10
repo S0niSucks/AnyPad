@@ -273,11 +273,19 @@ static void keep_reads_pending(usb_ctx *c)
 {
     int i;
 
-    if (now_ms() >= c->yield_until) topup_reads(c);
-    for (i = 0; i < c->n_event && i < c->ev_want && now_ms() >= c->yield_until; i++)
-        if (!c->busy[i]) xfer_start(c, i, c->ev_len);
-    for (i = 0; i < c->n_acl; i++)
-        if (!c->busy[N_EVENT_RD + i]) xfer_start(c, N_EVENT_RD + i, ACL_BUF);
+    /* While the chip is left to the system, no reads of ours are renewed:
+     * its driver is the only one in line. Events alone are not enough - the
+     * setup of its own pad (link key, L2CAP, HID) travels as ACL packets,
+     * and ours were reading those: the console never finished the setup and
+     * turned its DualSense away as "not compatible". Our pads' input pauses
+     * for that while; it resumes when the pause ends. */
+    if (now_ms() >= c->yield_until) {
+        topup_reads(c);
+        for (i = 0; i < c->n_event && i < c->ev_want; i++)
+            if (!c->busy[i]) xfer_start(c, i, c->ev_len);
+        for (i = 0; i < c->n_acl; i++)
+            if (!c->busy[N_EVENT_RD + i]) xfer_start(c, N_EVENT_RD + i, ACL_BUF);
+    }
 }
 
 /* ---- hci_ops ------------------------------------------------------------- */
@@ -399,10 +407,11 @@ static void op_event_reads(void *ctx, int n)
     reap(c);
 }
 
-/* Leaves the events to the system's driver for a while: our pending event
- * reads are stopped and not renewed until then, so the system's own read is
- * the only one in line (a DualSense reconnecting to the console pages this
- * controller, and only the system can answer it). */
+/* Leaves the chip to the system's driver for a while: our pending event AND
+ * ACL reads are stopped and not renewed until then, so the system's own
+ * reads are the only ones in line (a DualSense reconnecting to the console
+ * pages this controller, and only the system can answer it - and complete
+ * the setup, which is ACL traffic too). */
 static void op_yield(void *ctx, int ms)
 {
     usb_ctx *c = ctx;
@@ -410,14 +419,14 @@ static void op_yield(void *ctx, int ms)
     int i;
 
     c->yield_until = now_ms() + ms;
-    for (i = 0; i < c->n_event; i++) {
+    for (i = 0; i < c->n_event + c->n_acl; i++) {
         if (!c->busy[i]) continue;
         memset(&st, 0, sizeof st);
         st.ep_index = (uint8_t)i;
         ioctl(c->fd, USB_FS_STOP, &st);
     }
     reap(c);
-    log_line("usb: event reads left to the system for %d ms", ms);
+    log_line("usb: events and ACL left to the system for %d ms", ms);
 }
 
 static int op_next_event(void *ctx, unsigned char *out, int max)
