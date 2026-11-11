@@ -2,6 +2,11 @@
 #include "log.h"
 #include "util.h"
 
+/* for the capability comparison endpoint: dlsym'd so tests don't need libScePad */
+#include <dlfcn.h>
+static int32_t (*g_get_cap)(int32_t, int32_t *) = NULL;
+static int32_t (*g_get_ctrl_info)(int32_t, void *) = NULL;
+
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netinet/in.h>
@@ -366,6 +371,39 @@ static void handle(web_t *w, int fd, char *req)
         api_hci(h, fd, path + 12);
     } else if (strcmp(method, "GET") == 0 && strcmp(path, "/api/state") == 0) {
         api_state(w, fd);
+    } else if (strcmp(method, "GET") == 0 && strcmp(path, "/api/capability") == 0) {
+        /* The capability of every pad we can reach, for the comparison */
+        char buf[2048];
+        int n = 0;
+        if (!g_get_cap) {
+            g_get_cap = (int32_t (*)(int32_t, int32_t *))dlsym(RTLD_DEFAULT, "scePadGetCapability");
+            g_get_ctrl_info = (int32_t (*)(int32_t, void *))dlsym(RTLD_DEFAULT, "scePadGetControllerInformation");
+        }
+        n += snprintf(buf + n, sizeof buf - n, "{\"pads\":[");
+        {
+            static const int32_t handles[] = {
+                0x50300, 0x50301, 0x5030d, 0x5030c,
+                0x70301, 0x7030d, 0x80301, 0x8030c,
+                0x90301, 0x9030d, 0xa0301, 0xa030c,
+                0xb0301, 0xb030d, 0xc0301, 0xd030d,
+                /* small handles too */
+                0, 1, 2, 3, 4, 5, 6, 7,
+            };
+            int first = 1;
+            if (g_get_cap && g_get_ctrl_info)
+            for (int i = 0; i < 24; i++) {
+                int32_t cap = -1;
+                unsigned char info[128];
+                if (g_get_ctrl_info(handles[i], info) != 0) continue;
+                g_get_cap(handles[i], &cap);
+                n += snprintf(buf + n, sizeof buf - n,
+                              "%s{\"handle\":%d,\"cap\":\"%08x\"}",
+                              first ? "" : ",", (int)handles[i], (unsigned)cap);
+                first = 0;
+            }
+        }
+        n += snprintf(buf + n, sizeof buf - n, "]}");
+        respond_text(fd, 200, buf);
     } else if (strcmp(method, "GET") == 0 && strcmp(path, "/api/log") == 0) {
         api_log(w, fd);
     } else if (strcmp(method, "POST") == 0 && strcmp(path, "/api/pair") == 0 && h) {
