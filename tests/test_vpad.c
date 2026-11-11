@@ -80,6 +80,10 @@ int32_t scePadVirtualDeviceGetRemoteSetting(int32_t h, void *out)
     if (g_remote_result == 0) memcpy(out, g_remote, sizeof g_remote);
     return g_remote_result;
 }
+int32_t scePadGetCapability(int32_t h, int32_t *cap) { (void)h; *cap = 0; return 0; }
+int32_t scePadGetBluetoothAddress(int32_t h, void *a) { (void)h; memset(a, 0, 16); return 0; }
+int32_t scePadGetControllerInformation(int32_t h, void *i) { (void)h; memset(i, 0, 128); return 0; }
+int32_t scePadGetDeviceInfo(int32_t h, void *i) { (void)h; memset(i, 0, 128); return 0; }
 
 /* The wishes handed to the pad, as the output sink received them. */
 static pad_output g_got[8];

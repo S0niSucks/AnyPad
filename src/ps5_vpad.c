@@ -79,6 +79,10 @@ int32_t scePadVirtualDeviceAddDevice(void *param, int32_t deviceType);
 int32_t scePadVirtualDeviceInsertData(int32_t handle, const void *data);
 int32_t scePadVirtualDeviceGetRemoteSetting(int32_t handle, void *out_setting);
 int32_t scePadVirtualDeviceDeleteDevice(int32_t handle);
+int32_t scePadGetCapability(int32_t handle, int32_t *capability);
+int32_t scePadGetBluetoothAddress(int32_t handle, void *addr);
+int32_t scePadGetControllerInformation(int32_t handle, void *info);
+int32_t scePadGetDeviceInfo(int32_t handle, void *info);
 
 /* From the payload SDK (ps5/kernel.h). */
 uint64_t kernel_get_ucred_authid(pid_t pid);
@@ -688,6 +692,63 @@ static void finish_identification(long now)
         return;
     }
     v->st = VP_READY;
+
+    /* The comparison that tells us what to patch: everything the system
+     * knows about our virtual DualSense, beside what it knows about a
+     * real one. The difference is where capabilityBattery:0 vs :1 lives. */
+    {
+        int32_t cap = -1;
+        int32_t bt_addr[4];
+        unsigned char info[128];
+        int k;
+
+        scePadGetCapability(v->handle, &cap);
+        log_line("slot %d INFO: handle=%#x capability=%#x", slot, (unsigned)v->handle, (unsigned)cap);
+
+        memset(bt_addr, 0, sizeof bt_addr);
+        if (scePadGetBluetoothAddress(v->handle, bt_addr) == 0)
+            log_line("slot %d INFO: BT addr %08x %08x %08x %08x", slot,
+                     (unsigned)bt_addr[0], (unsigned)bt_addr[1],
+                     (unsigned)bt_addr[2], (unsigned)bt_addr[3]);
+
+        memset(info, 0, sizeof info);
+        if (scePadGetControllerInformation(v->handle, info) == 0) {
+            char hex[3 * 32 + 1];
+            for (k = 0; k < 32; k++) snprintf(hex + 3 * k, 4, "%02x ", info[k]);
+            hex[3 * 32] = 0;
+            log_line("slot %d INFO: controllerInfo %s", slot, hex);
+        }
+
+        memset(info, 0, sizeof info);
+        if (scePadGetDeviceInfo(v->handle, info) == 0) {
+            char hex[3 * 32 + 1];
+            for (k = 0; k < 32; k++) snprintf(hex + 3 * k, 4, "%02x ", info[k]);
+            hex[3 * 32] = 0;
+            log_line("slot %d INFO: deviceInfo %s", slot, hex);
+        }
+
+        /* a real pad, for comparison: probe the first few handles */
+        for (k = 0; k < 8; k++) {
+            unsigned char rinfo[128];
+            int32_t rcap = -1;
+            int32_t rbt[4];
+
+            if (k == v->handle) continue;  /* ours */
+            memset(rinfo, 0, sizeof rinfo);
+            if (scePadGetControllerInformation(k, rinfo) != 0) continue;  /* not there */
+            scePadGetCapability(k, &rcap);
+            memset(rbt, 0, sizeof rbt);
+            scePadGetBluetoothAddress(k, rbt);
+            {
+                char hex[3 * 32 + 1];
+                int j;
+                for (j = 0; j < 32; j++) snprintf(hex + 3 * j, 4, "%02x ", rinfo[j]);
+                hex[3 * 32] = 0;
+                log_line("REAL pad handle=%d capability=%#x BT=%08x ctrlInfo=%s",
+                         k, (unsigned)rcap, (unsigned)rbt[0], hex);
+            }
+        }
+    }
 }
 
 /* What the console asks of each virtual DualSense: the setting block the
